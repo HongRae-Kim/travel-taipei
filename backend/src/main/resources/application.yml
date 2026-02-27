@@ -18,5 +18,10 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
 
+external:
+  exchange:
+    api-key: ${EXCHANGE_API_KEY}
+    url: https://www.koreaexim.go.kr/site/program/financial/exchangeJSON
+
 server:
   port: 8080
