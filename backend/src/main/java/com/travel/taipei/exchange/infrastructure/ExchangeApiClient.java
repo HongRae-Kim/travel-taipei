@@ -19,6 +19,7 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeoutException;
 
 @Component
@@ -33,6 +34,9 @@ public class ExchangeApiClient {
     @Value("${external.exchange.url}")
     private String apiUrl;
 
+    @Value("${external.exchange.fallback-url:https://open.er-api.com/v6/latest/KRW}")
+    private String fallbackApiUrl;
+
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd");
     private static final String TARGET_CURRENCY = "TWD";
     private static final Retry RETRY_SPEC = Retry.backoff(2, Duration.ofMillis(300))
@@ -41,17 +45,21 @@ public class ExchangeApiClient {
 
     public ExchangeRateResponse fetchTwdRate() {
         for (int daysBack = 0; daysBack <= 3; daysBack++) {
-            String date = LocalDate.now().minusDays(daysBack).format(DATE_FORMAT);
+            LocalDate targetDate = LocalDate.now().minusDays(daysBack);
+            String date = targetDate.format(DATE_FORMAT);
             List<ApiItem> items = callApi(date);
 
-            return items.stream()
+            ExchangeRateResponse response = items.stream()
                     .filter(item -> TARGET_CURRENCY.equals(item.curUnit()) && item.result() == 1)
                     .findFirst()
-                    .map(item -> mapToResponse(item, LocalDate.now().minusDays(daysBack).toString()))
+                    .map(item -> mapToResponse(item, targetDate.toString()))
                     .orElse(null);
+            if (response != null) {
+                return response;
+            }
         }
 
-        throw new BusinessException(ErrorCode.EXCHANGE_DATA_NOT_FOUND);
+        return callFallbackApi();
     }
 
     private List<ApiItem> callApi(String date) {
@@ -85,6 +93,41 @@ public class ExchangeApiClient {
         return Double.parseDouble(value.replace(",", ""));
     }
 
+    private ExchangeRateResponse callFallbackApi() {
+        FallbackApiResponse response = webClient.get()
+                .uri(fallbackApiUrl)
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, res ->
+                        res.createException().flatMap(Mono::error))
+                .bodyToMono(FallbackApiResponse.class)
+                .retryWhen(RETRY_SPEC)
+                .onErrorMap(BusinessException.class, e -> e)
+                .onErrorMap(e -> !(e instanceof BusinessException), e -> new BusinessException(ErrorCode.EXTERNAL_API_ERROR))
+                .block();
+
+        if (response == null || response.rates() == null) {
+            throw new BusinessException(ErrorCode.EXCHANGE_DATA_NOT_FOUND);
+        }
+
+        Double twdPerKrw = response.rates().get(TARGET_CURRENCY);
+        if (twdPerKrw == null || twdPerKrw <= 0.0) {
+            throw new BusinessException(ErrorCode.EXCHANGE_DATA_NOT_FOUND);
+        }
+
+        double krwPerTwd = roundToTwoDigits(1.0 / twdPerKrw);
+        return new ExchangeRateResponse(
+                TARGET_CURRENCY,
+                krwPerTwd,
+                krwPerTwd,
+                krwPerTwd,
+                LocalDate.now().toString()
+        );
+    }
+
+    private double roundToTwoDigits(double value) {
+        return Math.round(value * 100.0) / 100.0;
+    }
+
     private static boolean isRetryableError(Throwable throwable) {
         if (throwable instanceof WebClientResponseException responseException) {
             return responseException.getStatusCode().value() == 429
@@ -102,5 +145,12 @@ public class ExchangeApiClient {
             @JsonProperty("deal_bas_r") String dealBasR,
             @JsonProperty("ttb") String ttb,
             @JsonProperty("tts") String tts
+    ) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record FallbackApiResponse(
+            @JsonProperty("result") String result,
+            @JsonProperty("base_code") String baseCode,
+            @JsonProperty("rates") Map<String, Double> rates
     ) {}
 }
