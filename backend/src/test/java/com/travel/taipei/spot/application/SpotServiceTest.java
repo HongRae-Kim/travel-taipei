@@ -31,10 +31,21 @@ class SpotServiceTest {
 
     @Test
     void getSpots_whenTypeIsValid_returnsSpotList() {
-        SpotResponse spot = new SpotResponse("place-1", "鼎泰豐", "restaurant", 4.5, "台北市信義區", null, 25.033, 121.565);
-        given(spotApiClient.searchNearby(any())).willReturn(List.of(spot));
+        SpotResponse spot = new SpotResponse(
+                "place-1",
+                "鼎泰豐",
+                "restaurant",
+                4.5,
+                "台北市信義區",
+                null,
+                25.033,
+                121.565,
+                0.3,
+                "가깝고 평점이 높아 추천해요."
+        );
+        given(spotApiClient.searchNearby(any(), any())).willReturn(List.of(spot));
 
-        List<SpotResponse> result = spotService.getSpots("restaurant");
+        List<SpotResponse> result = spotService.getSpots("restaurant", null, null, 5000, false, null);
 
         assertThat(result).hasSize(1);
         assertThat(result.get(0).name()).isEqualTo("鼎泰豐");
@@ -43,9 +54,18 @@ class SpotServiceTest {
 
     @Test
     void getSpots_whenTypeIsInvalid_throwsBusinessException() {
-        assertThatThrownBy(() -> spotService.getSpots("unknown"))
+        assertThatThrownBy(() -> spotService.getSpots("unknown", null, null, 5000, false, null))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage(ErrorCode.INVALID_SPOT_TYPE.getMessage());
+
+        verifyNoInteractions(spotApiClient);
+    }
+
+    @Test
+    void getSpots_whenLatitudeIsInvalid_throwsBusinessException() {
+        assertThatThrownBy(() -> spotService.getSpots("restaurant", 99.0, null, 5000, false, null))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage(ErrorCode.INVALID_INPUT.getMessage());
 
         verifyNoInteractions(spotApiClient);
     }

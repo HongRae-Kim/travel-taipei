@@ -41,7 +41,9 @@ public class RedisConfig {
                 .cacheDefaults(base.entryTtl(Duration.ofMinutes(10)))
                 .withInitialCacheConfigurations(Map.of(
                         "exchange-rates", base.entryTtl(Duration.ofHours(25)),
+                        "exchange-rates-backup", base.entryTtl(Duration.ofDays(7)),
                         "weather",        base.entryTtl(Duration.ofMinutes(30)),
+                        "weather-backup", base.entryTtl(Duration.ofHours(6)),
                         "spots",          base.entryTtl(Duration.ofMinutes(10)),
                         "spot-details",   base.entryTtl(Duration.ofMinutes(30))
                 ))

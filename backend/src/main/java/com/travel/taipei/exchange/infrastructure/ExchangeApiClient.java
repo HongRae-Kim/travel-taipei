@@ -7,15 +7,19 @@ import com.travel.taipei.global.exception.BusinessException;
 import com.travel.taipei.global.exception.ErrorCode;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientRequestException;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
 
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.concurrent.TimeoutException;
 
 @Component
 @RequiredArgsConstructor
@@ -31,6 +35,9 @@ public class ExchangeApiClient {
 
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd");
     private static final String TARGET_CURRENCY = "TWD";
+    private static final Retry RETRY_SPEC = Retry.backoff(2, Duration.ofMillis(300))
+            .maxBackoff(Duration.ofSeconds(2))
+            .filter(ExchangeApiClient::isRetryableError);
 
     public ExchangeRateResponse fetchTwdRate() {
         for (int daysBack = 0; daysBack <= 3; daysBack++) {
@@ -52,11 +59,12 @@ public class ExchangeApiClient {
                 .uri(apiUrl + "?authkey={key}&searchdate={date}&data=AP01", apiKey, date)
                 .retrieve()
                 .onStatus(HttpStatusCode::isError, response ->
-                        Mono.error(new BusinessException(ErrorCode.EXTERNAL_API_ERROR)))
+                        response.createException().flatMap(Mono::error))
                 .bodyToFlux(ApiItem.class)
                 .collectList()
+                .retryWhen(RETRY_SPEC)
                 .onErrorMap(BusinessException.class, e -> e)
-                .onErrorMap(Exception.class, e -> new BusinessException(ErrorCode.EXTERNAL_API_ERROR))
+                .onErrorMap(e -> !(e instanceof BusinessException), e -> new BusinessException(ErrorCode.EXTERNAL_API_ERROR))
                 .block();
 
         return items != null ? items : List.of();
@@ -75,6 +83,16 @@ public class ExchangeApiClient {
     private double parseRate(String value) {
         if (value == null || value.isBlank()) return 0.0;
         return Double.parseDouble(value.replace(",", ""));
+    }
+
+    private static boolean isRetryableError(Throwable throwable) {
+        if (throwable instanceof WebClientResponseException responseException) {
+            return responseException.getStatusCode().value() == 429
+                    || responseException.getStatusCode().is5xxServerError();
+        }
+
+        return throwable instanceof WebClientRequestException
+                || throwable instanceof TimeoutException;
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

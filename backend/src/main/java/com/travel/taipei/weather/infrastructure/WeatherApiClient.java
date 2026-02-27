@@ -10,9 +10,14 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientRequestException;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
 
+import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.TimeoutException;
 
 @Component
 @RequiredArgsConstructor
@@ -28,6 +33,9 @@ public class WeatherApiClient {
 
     private static final double TAIPEI_LAT = 25.0330;
     private static final double TAIPEI_LON = 121.5654;
+    private static final Retry RETRY_SPEC = Retry.backoff(2, Duration.ofMillis(300))
+            .maxBackoff(Duration.ofSeconds(2))
+            .filter(WeatherApiClient::isRetryableError);
 
     public WeatherResponse fetchTaipeiWeather() {
         ApiResponse response = webClient.get()
@@ -35,10 +43,11 @@ public class WeatherApiClient {
                         TAIPEI_LAT, TAIPEI_LON, apiKey)
                 .retrieve()
                 .onStatus(HttpStatusCode::isError, res ->
-                        Mono.error(new BusinessException(ErrorCode.EXTERNAL_API_ERROR)))
+                        res.createException().flatMap(Mono::error))
                 .bodyToMono(ApiResponse.class)
+                .retryWhen(RETRY_SPEC)
                 .onErrorMap(BusinessException.class, e -> e)
-                .onErrorMap(Exception.class, e -> new BusinessException(ErrorCode.EXTERNAL_API_ERROR))
+                .onErrorMap(e -> !(e instanceof BusinessException), e -> new BusinessException(ErrorCode.EXTERNAL_API_ERROR))
                 .block();
 
         if (response == null) {
@@ -66,6 +75,16 @@ public class WeatherApiClient {
                 iconUrl,
                 res.wind() != null ? res.wind().speed() : 0.0
         );
+    }
+
+    private static boolean isRetryableError(Throwable throwable) {
+        if (throwable instanceof WebClientResponseException responseException) {
+            return responseException.getStatusCode().value() == 429
+                    || responseException.getStatusCode().is5xxServerError();
+        }
+
+        return throwable instanceof WebClientRequestException
+                || throwable instanceof TimeoutException;
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
