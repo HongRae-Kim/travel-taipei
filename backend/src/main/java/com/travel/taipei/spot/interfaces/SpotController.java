@@ -21,8 +21,15 @@ public class SpotController {
     private final SpotService spotService;
 
     @GetMapping
-    public ApiResponse<List<SpotResponse>> getSpots(@RequestParam String type) {
-        return ApiResponse.ok(spotService.getSpots(type));
+    public ApiResponse<List<SpotResponse>> getSpots(
+            @RequestParam String type,
+            @RequestParam(required = false) Double lat,
+            @RequestParam(required = false) Double lng,
+            @RequestParam(defaultValue = "5000") Integer radius,
+            @RequestParam(defaultValue = "false") boolean openNow,
+            @RequestParam(required = false) Double minRating
+    ) {
+        return ApiResponse.ok(spotService.getSpots(type, lat, lng, radius, openNow, minRating));
     }
 
     @GetMapping("/{placeId}")

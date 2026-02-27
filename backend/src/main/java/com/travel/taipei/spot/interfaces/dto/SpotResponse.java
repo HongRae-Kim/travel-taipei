@@ -8,5 +8,7 @@ public record SpotResponse(
         String address,
         String photoUrl,
         double lat,
-        double lng
+        double lng,
+        double distanceKm,
+        String reason
 ) {}
