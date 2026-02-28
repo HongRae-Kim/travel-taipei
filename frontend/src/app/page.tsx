@@ -69,6 +69,13 @@ type WeatherForecastItem = {
   iconUrl: string;
 };
 
+type TranslationResult = {
+  sourceText: string;
+  translatedText: string;
+  sourceLang: string;
+  targetLang: string;
+};
+
 type SpotFilters = {
   type: "restaurant" | "cafe" | "attraction";
   radius: string;
@@ -92,7 +99,21 @@ const PHRASE_CATEGORIES = [
   { value: "emergency", label: "🚨 긴급" },
 ];
 
-type Tab = "home" | "phrase" | "spot";
+const QUICK_TRANSLATE_SAMPLES = [
+  "안녕하세요. 한국에서 왔어요.",
+  "이 근처 추천 음식점이 어디예요?",
+  "지하철역까지 어떻게 가나요?",
+  "카드 결제 가능한가요?",
+];
+
+type Tab = "home" | "phrase" | "translate" | "spot";
+
+const TAB_ITEMS: Array<{ tab: Tab; icon: string; label: string }> = [
+  { tab: "home", icon: "🏠", label: "홈" },
+  { tab: "phrase", icon: "💬", label: "회화" },
+  { tab: "translate", icon: "🈶", label: "번역" },
+  { tab: "spot", icon: "📍", label: "장소" },
+];
 
 function travelTime(distanceKm: number) {
   const walkMin = Math.max(1, Math.round((distanceKm / 4.5) * 60));
@@ -135,6 +156,10 @@ export default function Home() {
   const [phrases, setPhrases] = useState<PhraseResponse[]>([]);
   const [selectedCategory, setSelectedCategory] = useState("airport");
   const [loadingPhrases, setLoadingPhrases] = useState(false);
+  const [translateInput, setTranslateInput] = useState("안녕하세요. 한국에서 왔어요.");
+  const [translatedText, setTranslatedText] = useState("");
+  const [loadingTranslate, setLoadingTranslate] = useState(false);
+  const [translateError, setTranslateError] = useState<string | null>(null);
 
   // 장소
   const [spots, setSpots] = useState<SpotResponse[]>([]);
@@ -222,6 +247,41 @@ export default function Home() {
   function handleCategoryChange(category: string) {
     setSelectedCategory(category);
     void loadPhrases(category);
+  }
+
+  async function translateKoreanToTraditionalChinese(input?: string) {
+    const sourceText = (input ?? translateInput).trim();
+    if (!sourceText) {
+      setTranslatedText("");
+      setTranslateError("번역할 한국어 문장을 입력해주세요.");
+      return;
+    }
+
+    setLoadingTranslate(true);
+    setTranslateError(null);
+    try {
+      const response = await fetch("/api/travel/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: sourceText }),
+      });
+
+      const payload = (await response.json()) as ApiEnvelope<TranslationResult>;
+      if (!response.ok || !payload.success) {
+        throw new Error(payload.message || "번역 요청에 실패했습니다.");
+      }
+      setTranslatedText(payload.data.translatedText);
+    } catch (error) {
+      setTranslatedText("");
+      setTranslateError(error instanceof Error ? error.message : "번역 요청에 실패했습니다.");
+    } finally {
+      setLoadingTranslate(false);
+    }
+  }
+
+  function applySampleSentence(sentence: string) {
+    setTranslateInput(sentence);
+    void translateKoreanToTraditionalChinese(sentence);
   }
 
   async function detectLocation() {
@@ -446,13 +506,13 @@ export default function Home() {
           </div>
           {/* 데스크탑 탭 */}
           <nav className="hidden items-center gap-2 rounded-full border border-white/60 bg-white/60 p-1 sm:flex">
-            {(["home", "phrase", "spot"] as Tab[]).map((tab) => (
+            {TAB_ITEMS.map(({ tab, icon, label }) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
                 className={`ui-tab ${activeTab === tab ? "ui-tab-active" : ""}`}
               >
-                {tab === "home" ? "🏠 홈" : tab === "phrase" ? "💬 회화" : "📍 장소"}
+                {icon} {label}
               </button>
             ))}
           </nav>
@@ -669,6 +729,86 @@ export default function Home() {
                 ))
               )}
             </div>
+          </div>
+        )}
+
+        {/* ── 번역 탭 ── */}
+        {activeTab === "translate" && (
+          <div className="grid grid-cols-1 gap-4">
+            <section className="ui-hero ui-appear rounded-3xl p-4 text-white sm:p-6">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/75">
+                Korean → Traditional Chinese
+              </p>
+              <h2 className="mt-2 text-xl font-black leading-tight sm:text-2xl">
+                한국어를 대만 번체 중국어로
+                <br className="sm:hidden" /> 바로 번역
+              </h2>
+              <p className="mt-1 text-xs text-white/85 sm:text-sm">
+                택시, 식당, 길찾기에서 바로 보여줄 문장을 빠르게 만들 수 있어요.
+              </p>
+            </section>
+
+            <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
+              <div className="flex items-center justify-between">
+                <h3 className="font-bold text-slate-800">번역할 한국어 문장</h3>
+                <span className="text-xs font-semibold text-slate-400">
+                  {translateInput.trim().length}/800
+                </span>
+              </div>
+
+              <textarea
+                value={translateInput}
+                onChange={(e) => setTranslateInput(e.target.value)}
+                placeholder="예) 이 근처에서 야시장 가려면 어떻게 가나요?"
+                className="mt-3 h-36 w-full resize-none rounded-2xl border border-white/70 bg-white/80 p-3 text-sm leading-relaxed text-slate-800 outline-none ring-teal-400/40 transition focus:ring"
+                maxLength={800}
+              />
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                {QUICK_TRANSLATE_SAMPLES.map((sample) => (
+                  <button
+                    key={sample}
+                    onClick={() => applySampleSentence(sample)}
+                    className="ui-chip px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-white"
+                  >
+                    {sample}
+                  </button>
+                ))}
+              </div>
+
+              <div className="mt-4 flex justify-end">
+                <button
+                  onClick={() => void translateKoreanToTraditionalChinese()}
+                  disabled={loadingTranslate}
+                  className="rounded-xl bg-gradient-to-r from-teal-700 to-cyan-700 px-4 py-2 text-sm font-semibold text-white transition hover:from-teal-600 hover:to-cyan-600 disabled:opacity-60"
+                >
+                  {loadingTranslate ? "번역 중..." : "번역하기"}
+                </button>
+              </div>
+            </section>
+
+            {translateError && (
+              <div className="ui-panel rounded-2xl border-rose-300/70 bg-rose-50/85 px-4 py-3 text-sm text-rose-700">
+                {translateError}
+              </div>
+            )}
+
+            <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
+              <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-400">
+                번역 결과 (繁體中文)
+              </p>
+              {loadingTranslate ? (
+                <p className="mt-3 text-sm text-slate-400">번역 결과를 가져오는 중...</p>
+              ) : translatedText ? (
+                <p className="mt-3 text-2xl font-bold leading-relaxed text-slate-900">
+                  {translatedText}
+                </p>
+              ) : (
+                <p className="mt-3 text-sm text-slate-400">
+                  한국어 문장을 입력한 뒤 <strong>번역하기</strong>를 눌러주세요.
+                </p>
+              )}
+            </section>
           </div>
         )}
 
@@ -1049,12 +1189,8 @@ export default function Home() {
 
       {/* 모바일 하단 탭바 */}
       <nav className="safe-bottom-nav fixed bottom-0 left-0 right-0 z-30 border-t border-white/60 bg-slate-50/85 backdrop-blur sm:hidden">
-        <div className="grid grid-cols-3">
-          {([
-            { tab: "home" as Tab, icon: "🏠", label: "홈" },
-            { tab: "phrase" as Tab, icon: "💬", label: "회화" },
-            { tab: "spot" as Tab, icon: "📍", label: "장소" },
-          ]).map(({ tab, icon, label }) => (
+        <div className="grid grid-cols-4">
+          {TAB_ITEMS.map(({ tab, icon, label }) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
