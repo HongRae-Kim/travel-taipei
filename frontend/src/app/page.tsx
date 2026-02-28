@@ -76,6 +76,25 @@ type TranslationResult = {
   targetLang: string;
 };
 
+type SavedSpot = {
+  id: string;
+  name: string;
+  type: string;
+  rating: number | null;
+  address: string;
+  lat: number;
+  lng: number;
+  photoUrl: string | null;
+};
+
+type ExpenseRecord = {
+  id: string;
+  note: string;
+  amountKrw: number;
+  amountTwd: number;
+  createdAt: string;
+};
+
 type SpotFilters = {
   type: "restaurant" | "cafe" | "attraction";
   radius: string;
@@ -114,6 +133,146 @@ const TAB_ITEMS: Array<{ tab: Tab; icon: string; label: string }> = [
   { tab: "translate", icon: "🈶", label: "번역" },
   { tab: "spot", icon: "📍", label: "장소" },
 ];
+
+const STORAGE_KEYS = {
+  savedSpots: "travelTaipei:savedSpots",
+  budget: "travelTaipei:budget",
+  expenses: "travelTaipei:expenses",
+  phrasesPrefix: "travelTaipei:phrases:",
+  spotsPrefix: "travelTaipei:spots:",
+  spotDetailPrefix: "travelTaipei:spotDetail:",
+  translatePrefix: "travelTaipei:translate:ko-zhTW:",
+};
+
+const WEEKDAY_KO = [
+  "일요일",
+  "월요일",
+  "화요일",
+  "수요일",
+  "목요일",
+  "금요일",
+  "토요일",
+];
+
+const EMERGENCY_CONTACTS: Array<{ label: string; number: string; description: string }> = [
+  { label: "경찰", number: "110", description: "분실/도난/긴급 신고" },
+  { label: "소방·구급", number: "119", description: "응급상황/구급차" },
+  { label: "관광 핫라인", number: "0800-011-765", description: "24시간 관광 상담" },
+];
+
+const EMERGENCY_PHRASES: Array<{ korean: string; chinese: string }> = [
+  { korean: "도와주세요.", chinese: "請幫幫我。" },
+  { korean: "여권을 잃어버렸어요.", chinese: "我的護照不見了。" },
+  { korean: "가까운 병원이 어디예요?", chinese: "附近的醫院在哪裡？" },
+];
+
+const AIRPORT_GUIDE = [
+  {
+    airport: "타오위안 공항 (TPE)",
+    options: [
+      "공항 MRT: 타이베이 메인역까지 약 35~40분, 편도 약 NT$150",
+      "버스 1819: 타이베이 메인역까지 약 55~70분, 교통상황 영향 큼",
+      "택시: 시내까지 약 40~60분, 대략 NT$1,200~1,600",
+    ],
+  },
+  {
+    airport: "쑹산 공항 (TSA)",
+    options: [
+      "MRT: 도심 접근 가장 빠름, 대부분 20분 내 이동",
+      "택시: 시내 중심지까지 약 15~30분",
+      "버스: 호텔 위치에 따라 환승 1회 기준 이동",
+    ],
+  },
+];
+
+function readStorage<T>(key: string) {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function writeStorage(key: string, value: unknown) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // no-op: localStorage can fail in private mode or quota exceeded.
+  }
+}
+
+function makeSpotsCacheKey(nextFilters: SpotFilters, loc: { lat: number; lng: number } | null) {
+  const lat = loc ? loc.lat.toFixed(3) : "none";
+  const lng = loc ? loc.lng.toFixed(3) : "none";
+  return `${STORAGE_KEYS.spotsPrefix}${nextFilters.type}:${nextFilters.radius}:${nextFilters.openNow}:${nextFilters.minRating || "all"}:${lat}:${lng}`;
+}
+
+function haversineKm(fromLat: number, fromLng: number, toLat: number, toLng: number) {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(toLat - fromLat);
+  const dLng = toRad(toLng - fromLng);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(fromLat)) *
+      Math.cos(toRad(toLat)) *
+      Math.sin(dLng / 2) *
+      Math.sin(dLng / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return 6371 * c;
+}
+
+function optimizeRoute(
+  spots: SavedSpot[],
+  start: { lat: number; lng: number } | null
+) {
+  if (spots.length === 0) {
+    return { ordered: [] as SavedSpot[], legDistances: [] as number[], totalDistanceKm: 0 };
+  }
+
+  const remaining = [...spots];
+  const ordered: SavedSpot[] = [];
+  const legDistances: number[] = [];
+  let currentPoint = start ?? { lat: remaining[0].lat, lng: remaining[0].lng };
+
+  while (remaining.length > 0) {
+    let bestIndex = 0;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < remaining.length; i += 1) {
+      const spot = remaining[i];
+      const distance = haversineKm(currentPoint.lat, currentPoint.lng, spot.lat, spot.lng);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = i;
+      }
+    }
+    const [next] = remaining.splice(bestIndex, 1);
+    ordered.push(next);
+    legDistances.push(bestDistance);
+    currentPoint = { lat: next.lat, lng: next.lng };
+  }
+
+  const totalDistanceKm = legDistances.reduce((sum, dist) => sum + dist, 0);
+  return { ordered, legDistances, totalDistanceKm };
+}
+
+function getTodayOpeningInfo(openingHours: string[]) {
+  const dayLabel = WEEKDAY_KO[new Date().getDay()];
+  const line = openingHours.find((entry) => entry.startsWith(dayLabel));
+  if (!line) {
+    return { status: "정보 없음", detail: "오늘 영업시간 정보를 찾지 못했습니다." };
+  }
+  if (line.includes("휴무")) {
+    return { status: "오늘 휴무", detail: line };
+  }
+  if (line.includes("24시간")) {
+    return { status: "24시간 영업", detail: line };
+  }
+  return { status: "영업 정보", detail: line };
+}
 
 function travelTime(distanceKm: number) {
   const walkMin = Math.max(1, Math.round((distanceKm / 4.5) * 60));
@@ -160,6 +319,8 @@ export default function Home() {
   const [translatedText, setTranslatedText] = useState("");
   const [loadingTranslate, setLoadingTranslate] = useState(false);
   const [translateError, setTranslateError] = useState<string | null>(null);
+  const [isOnline, setIsOnline] = useState(true);
+  const [copiedMessage, setCopiedMessage] = useState<string | null>(null);
 
   // 장소
   const [spots, setSpots] = useState<SpotResponse[]>([]);
@@ -180,6 +341,12 @@ export default function Home() {
   const sheetCanDrag = useRef(false);
   const lightboxOpenedAt = useRef(0);
   const lightboxImages = spotDetail?.photoUrls ?? [];
+  const [savedSpots, setSavedSpots] = useState<SavedSpot[]>([]);
+  const [dailyBudgetTwd, setDailyBudgetTwd] = useState("1500");
+  const [expenses, setExpenses] = useState<ExpenseRecord[]>([]);
+  const [expenseKrwInput, setExpenseKrwInput] = useState("");
+  const [expenseNoteInput, setExpenseNoteInput] = useState("");
+  const [budgetError, setBudgetError] = useState<string | null>(null);
 
   useEffect(() => {
     void loadSummary();
@@ -187,6 +354,52 @@ export default function Home() {
     void loadPhrases("airport");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const cachedSavedSpots = readStorage<SavedSpot[]>(STORAGE_KEYS.savedSpots);
+    if (cachedSavedSpots) {
+      setSavedSpots(cachedSavedSpots);
+    }
+
+    const cachedBudget = readStorage<{ dailyBudgetTwd: string }>(STORAGE_KEYS.budget);
+    if (cachedBudget?.dailyBudgetTwd) {
+      setDailyBudgetTwd(cachedBudget.dailyBudgetTwd);
+    }
+
+    const cachedExpenses = readStorage<ExpenseRecord[]>(STORAGE_KEYS.expenses);
+    if (cachedExpenses) {
+      setExpenses(cachedExpenses);
+    }
+
+    const updateNetworkState = () => setIsOnline(window.navigator.onLine);
+    updateNetworkState();
+    window.addEventListener("online", updateNetworkState);
+    window.addEventListener("offline", updateNetworkState);
+    return () => {
+      window.removeEventListener("online", updateNetworkState);
+      window.removeEventListener("offline", updateNetworkState);
+    };
+  }, []);
+
+  useEffect(() => {
+    writeStorage(STORAGE_KEYS.savedSpots, savedSpots);
+  }, [savedSpots]);
+
+  useEffect(() => {
+    writeStorage(STORAGE_KEYS.budget, { dailyBudgetTwd });
+  }, [dailyBudgetTwd]);
+
+  useEffect(() => {
+    writeStorage(STORAGE_KEYS.expenses, expenses);
+  }, [expenses]);
+
+  useEffect(() => {
+    if (!copiedMessage) return;
+    const timer = window.setTimeout(() => setCopiedMessage(null), 1800);
+    return () => window.clearTimeout(timer);
+  }, [copiedMessage]);
 
   useEffect(() => {
     if (lightboxIndex === null) return;
@@ -237,8 +450,14 @@ export default function Home() {
     try {
       const data = await requestApi<PhraseResponse[]>(`/api/travel/phrases/${category}`);
       setPhrases(data);
+      writeStorage(`${STORAGE_KEYS.phrasesPrefix}${category}`, data);
     } catch {
-      setPhrases([]);
+      const cached = readStorage<PhraseResponse[]>(`${STORAGE_KEYS.phrasesPrefix}${category}`);
+      if (cached) {
+        setPhrases(cached);
+      } else {
+        setPhrases([]);
+      }
     } finally {
       setLoadingPhrases(false);
     }
@@ -259,6 +478,7 @@ export default function Home() {
 
     setLoadingTranslate(true);
     setTranslateError(null);
+    const translateCacheKey = `${STORAGE_KEYS.translatePrefix}${sourceText}`;
     try {
       const response = await fetch("/api/travel/translate", {
         method: "POST",
@@ -271,9 +491,16 @@ export default function Home() {
         throw new Error(payload.message || "번역 요청에 실패했습니다.");
       }
       setTranslatedText(payload.data.translatedText);
+      writeStorage(translateCacheKey, payload.data);
     } catch (error) {
-      setTranslatedText("");
-      setTranslateError(error instanceof Error ? error.message : "번역 요청에 실패했습니다.");
+      const cached = readStorage<TranslationResult>(translateCacheKey);
+      if (cached?.translatedText) {
+        setTranslatedText(cached.translatedText);
+        setTranslateError("오프라인 캐시 번역을 표시 중입니다.");
+      } else {
+        setTranslatedText("");
+        setTranslateError(error instanceof Error ? error.message : "번역 요청에 실패했습니다.");
+      }
     } finally {
       setLoadingTranslate(false);
     }
@@ -282,6 +509,109 @@ export default function Home() {
   function applySampleSentence(sentence: string) {
     setTranslateInput(sentence);
     void translateKoreanToTraditionalChinese(sentence);
+  }
+
+  function normalizeSavedSpotFromList(spot: SpotResponse): SavedSpot {
+    return {
+      id: spot.id,
+      name: spot.name,
+      type: spot.type,
+      rating: spot.rating,
+      address: spot.address,
+      lat: spot.lat,
+      lng: spot.lng,
+      photoUrl: spot.photoUrl,
+    };
+  }
+
+  function normalizeSavedSpotFromDetail(detail: SpotDetailResponse): SavedSpot {
+    const listMatched = spots.find((spot) => spot.id === detail.id);
+    return {
+      id: detail.id,
+      name: detail.name,
+      type: detail.type,
+      rating: detail.rating,
+      address: detail.address,
+      lat: detail.lat,
+      lng: detail.lng,
+      photoUrl: detail.photoUrls[0] ?? listMatched?.photoUrl ?? null,
+    };
+  }
+
+  function isSavedSpot(spotId: string) {
+    return savedSpots.some((spot) => spot.id === spotId);
+  }
+
+  function toggleSavedSpot(spot: SavedSpot) {
+    setSavedSpots((prev) =>
+      prev.some((item) => item.id === spot.id)
+        ? prev.filter((item) => item.id !== spot.id)
+        : [...prev, spot]
+    );
+  }
+
+  async function copyText(text: string, label: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedMessage(`${label} 복사 완료`);
+    } catch {
+      setCopiedMessage("복사에 실패했습니다.");
+    }
+  }
+
+  async function shareSavedCourse() {
+    if (savedSpots.length === 0) return;
+    const route = optimizeRoute(savedSpots, userLocation);
+    const text = route.ordered
+      .map((spot, idx) => `${idx + 1}. ${spot.name} - ${spot.address}`)
+      .join("\n");
+    const payload = `타이베이 추천 코스\n${text}`;
+
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: "타이베이 추천 코스",
+          text: payload,
+        });
+        return;
+      } catch {
+        // ignore and fallback to clipboard.
+      }
+    }
+    await copyText(payload, "코스");
+  }
+
+  function addExpense() {
+    const amountKrw = Number(expenseKrwInput);
+    if (!Number.isFinite(amountKrw) || amountKrw <= 0) {
+      setBudgetError("지출 금액(원)을 올바르게 입력해주세요.");
+      return;
+    }
+    const baseRate = exchange?.baseRate && exchange.baseRate > 0 ? exchange.baseRate : 42;
+    const amountTwd = Number((amountKrw / baseRate).toFixed(2));
+
+    setExpenses((prev) => [
+      {
+        id: `${Date.now()}`,
+        note: expenseNoteInput.trim() || "기타 지출",
+        amountKrw,
+        amountTwd,
+        createdAt: new Date().toISOString(),
+      },
+      ...prev,
+    ]);
+    setExpenseKrwInput("");
+    setExpenseNoteInput("");
+    setBudgetError(null);
+  }
+
+  function removeExpense(expenseId: string) {
+    setExpenses((prev) => prev.filter((item) => item.id !== expenseId));
+  }
+
+  function clearExpenses() {
+    setExpenses([]);
+    setBudgetError(null);
   }
 
   async function detectLocation() {
@@ -310,6 +640,7 @@ export default function Home() {
   ) {
     setLoadingSpots(true);
     setSpotError(null);
+    const cacheKey = makeSpotsCacheKey(nextFilters, loc);
     try {
       const params = new URLSearchParams({
         type: nextFilters.type,
@@ -325,11 +656,18 @@ export default function Home() {
       }
       const data = await requestApi<SpotResponse[]>(`/api/travel/spots?${params.toString()}`);
       setSpots(data);
+      writeStorage(cacheKey, data);
       setSpotDetail(null);
       setSelectedSpotId(null);
     } catch (error) {
-      setSpots([]);
-      setSpotError(error instanceof Error ? error.message : "장소 목록 조회에 실패했습니다.");
+      const cached = readStorage<SpotResponse[]>(cacheKey);
+      if (cached) {
+        setSpots(cached);
+        setSpotError("네트워크 오류로 오프라인 캐시 목록을 표시합니다.");
+      } else {
+        setSpots([]);
+        setSpotError(error instanceof Error ? error.message : "장소 목록 조회에 실패했습니다.");
+      }
     } finally {
       setLoadingSpots(false);
     }
@@ -409,14 +747,22 @@ export default function Home() {
     sheetDragYRef.current = 0;
     setSheetDragY(0);
     setSelectedSpotId(spotId);
+    const detailCacheKey = `${STORAGE_KEYS.spotDetailPrefix}${filters.type}:${spotId}`;
     try {
       const detail = await requestApi<SpotDetailResponse>(
         `/api/travel/spots/${spotId}?type=${filters.type}`
       );
       setSpotDetail(detail);
+      writeStorage(detailCacheKey, detail);
     } catch (error) {
-      setSpotDetail(null);
-      setDetailError(error instanceof Error ? error.message : "장소 상세 조회에 실패했습니다.");
+      const cached = readStorage<SpotDetailResponse>(detailCacheKey);
+      if (cached) {
+        setSpotDetail(cached);
+        setDetailError("오프라인 캐시 상세정보를 표시합니다.");
+      } else {
+        setSpotDetail(null);
+        setDetailError(error instanceof Error ? error.message : "장소 상세 조회에 실패했습니다.");
+      }
     } finally {
       setLoadingDetail(false);
     }
@@ -426,6 +772,41 @@ export default function Home() {
     if (loadingSpots) return "조회 중...";
     return `${spots.length}개 장소`;
   }, [loadingSpots, spots.length]);
+
+  const optimizedRoute = useMemo(
+    () => optimizeRoute(savedSpots, userLocation),
+    [savedSpots, userLocation]
+  );
+
+  const routeTimeSummary = useMemo(() => {
+    const walkMin = optimizedRoute.legDistances.reduce(
+      (sum, distance) => sum + travelTime(distance).walkMin,
+      0
+    );
+    const transitMin = optimizedRoute.legDistances.reduce(
+      (sum, distance) => sum + travelTime(distance).transitMin,
+      0
+    );
+    return { walkMin, transitMin };
+  }, [optimizedRoute.legDistances]);
+
+  const budgetSummary = useMemo(() => {
+    const budget = Number(dailyBudgetTwd) || 0;
+    const spentTwd = expenses.reduce((sum, expense) => sum + expense.amountTwd, 0);
+    const spentKrw = expenses.reduce((sum, expense) => sum + expense.amountKrw, 0);
+    const remainTwd = Number((budget - spentTwd).toFixed(2));
+    return {
+      budget,
+      spentTwd: Number(spentTwd.toFixed(2)),
+      spentKrw: Math.round(spentKrw),
+      remainTwd,
+    };
+  }, [dailyBudgetTwd, expenses]);
+
+  const todayOpeningInfo = useMemo(
+    () => (spotDetail ? getTodayOpeningInfo(spotDetail.openingHours) : null),
+    [spotDetail]
+  );
 
   // ── UI ───────────────────────────────────────────────────────────────
 
@@ -521,6 +902,16 @@ export default function Home() {
 
       {/* 콘텐츠 */}
       <main className="mx-auto max-w-5xl px-4 pb-[calc(7rem+env(safe-area-inset-bottom))] pt-4 sm:pb-10 sm:pt-6">
+        {!isOnline && (
+          <div className="ui-panel mb-4 rounded-2xl border-amber-300/70 bg-amber-50/90 px-4 py-3 text-sm text-amber-800">
+            현재 오프라인 상태입니다. 저장된 캐시 데이터를 우선 보여줍니다.
+          </div>
+        )}
+        {copiedMessage && (
+          <div className="ui-panel mb-4 rounded-2xl border-emerald-300/70 bg-emerald-50/85 px-4 py-3 text-sm text-emerald-700">
+            {copiedMessage}
+          </div>
+        )}
 
         {/* ── 홈 탭 ── */}
         {activeTab === "home" && (
@@ -689,6 +1080,163 @@ export default function Home() {
                 <p className="mt-4 text-sm text-slate-400">환율 데이터 없음</p>
               )}
             </section>
+
+            {/* 예산 트래커 */}
+            <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
+              <div className="flex items-center justify-between">
+                <h2 className="font-bold text-slate-700">여행 예산 트래커</h2>
+                <button
+                  onClick={clearExpenses}
+                  className="text-xs font-semibold text-slate-400 underline"
+                >
+                  지출 초기화
+                </button>
+              </div>
+
+              <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs sm:text-sm">
+                <div className="rounded-xl bg-slate-100 px-2 py-2.5">
+                  <p className="text-slate-500">일 예산</p>
+                  <p className="mt-0.5 font-bold text-slate-800">{budgetSummary.budget.toLocaleString()} TWD</p>
+                </div>
+                <div className="rounded-xl bg-rose-50 px-2 py-2.5">
+                  <p className="text-rose-500">사용</p>
+                  <p className="mt-0.5 font-bold text-rose-700">{budgetSummary.spentTwd.toLocaleString()} TWD</p>
+                </div>
+                <div className={`rounded-xl px-2 py-2.5 ${budgetSummary.remainTwd >= 0 ? "bg-emerald-50" : "bg-amber-50"}`}>
+                  <p className={`${budgetSummary.remainTwd >= 0 ? "text-emerald-600" : "text-amber-600"}`}>잔여</p>
+                  <p className={`mt-0.5 font-bold ${budgetSummary.remainTwd >= 0 ? "text-emerald-700" : "text-amber-700"}`}>
+                    {budgetSummary.remainTwd.toLocaleString()} TWD
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min={0}
+                  value={dailyBudgetTwd}
+                  onChange={(e) => setDailyBudgetTwd(e.target.value)}
+                  className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
+                  placeholder="일 예산 (TWD)"
+                />
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min={0}
+                  value={expenseKrwInput}
+                  onChange={(e) => setExpenseKrwInput(e.target.value)}
+                  className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
+                  placeholder="지출 금액 (KRW)"
+                />
+                <button
+                  onClick={addExpense}
+                  className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                >
+                  추가
+                </button>
+              </div>
+
+              <input
+                type="text"
+                value={expenseNoteInput}
+                onChange={(e) => setExpenseNoteInput(e.target.value)}
+                className="mt-2 w-full rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
+                placeholder="지출 메모 (예: 야시장 저녁)"
+              />
+
+              {budgetError && (
+                <p className="mt-2 text-sm font-semibold text-rose-600">{budgetError}</p>
+              )}
+
+              <div className="mt-3 grid gap-2">
+                {expenses.length === 0 ? (
+                  <p className="text-sm text-slate-400">아직 기록된 지출이 없습니다.</p>
+                ) : (
+                  expenses.slice(0, 6).map((expense) => (
+                    <div
+                      key={expense.id}
+                      className="flex items-center justify-between rounded-xl border border-white/70 bg-white/70 px-3 py-2"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-slate-700">{expense.note}</p>
+                        <p className="text-xs text-slate-400">
+                          {new Date(expense.createdAt).toLocaleString("ko-KR", {
+                            month: "numeric",
+                            day: "numeric",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </p>
+                      </div>
+                      <div className="ml-3 text-right">
+                        <p className="text-sm font-bold text-slate-800">{expense.amountTwd.toLocaleString()} TWD</p>
+                        <p className="text-xs text-slate-400">{expense.amountKrw.toLocaleString()} 원</p>
+                        <button
+                          onClick={() => removeExpense(expense.id)}
+                          className="text-[11px] font-semibold text-slate-400 underline"
+                        >
+                          삭제
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </section>
+
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              {/* 긴급/안전 카드 */}
+              <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
+                <h2 className="font-bold text-slate-700">긴급 연락 · 안전 카드</h2>
+                <div className="mt-3 grid gap-2">
+                  {EMERGENCY_CONTACTS.map((contact) => (
+                    <a
+                      key={contact.label}
+                      href={`tel:${contact.number}`}
+                      className="flex items-center justify-between rounded-xl border border-white/70 bg-white/75 px-3 py-2"
+                    >
+                      <div>
+                        <p className="text-sm font-bold text-slate-700">{contact.label}</p>
+                        <p className="text-xs text-slate-500">{contact.description}</p>
+                      </div>
+                      <span className="text-sm font-black text-teal-700">{contact.number}</span>
+                    </a>
+                  ))}
+                </div>
+                <div className="mt-3 grid gap-2">
+                  {EMERGENCY_PHRASES.map((phrase) => (
+                    <div key={phrase.korean} className="rounded-xl border border-white/70 bg-white/70 px-3 py-2">
+                      <p className="text-xs text-slate-500">{phrase.korean}</p>
+                      <p className="mt-0.5 text-sm font-bold text-slate-800">{phrase.chinese}</p>
+                      <button
+                        onClick={() => void copyText(phrase.chinese, "긴급 문장")}
+                        className="mt-1 text-xs font-semibold text-teal-700 underline"
+                      >
+                        중국어 문장 복사
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              {/* 공항 이동 가이드 */}
+              <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
+                <h2 className="font-bold text-slate-700">공항 ↔ 시내 이동 가이드</h2>
+                <div className="mt-3 grid gap-3">
+                  {AIRPORT_GUIDE.map((item) => (
+                    <div key={item.airport} className="rounded-xl border border-white/70 bg-white/75 px-3 py-2.5">
+                      <p className="text-sm font-black text-slate-800">{item.airport}</p>
+                      <ul className="mt-1.5 grid gap-1">
+                        {item.options.map((option) => (
+                          <li key={option} className="text-xs text-slate-600">• {option}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </div>
           </div>
         )}
 
@@ -800,9 +1348,17 @@ export default function Home() {
               {loadingTranslate ? (
                 <p className="mt-3 text-sm text-slate-400">번역 결과를 가져오는 중...</p>
               ) : translatedText ? (
-                <p className="mt-3 text-2xl font-bold leading-relaxed text-slate-900">
-                  {translatedText}
-                </p>
+                <>
+                  <p className="mt-3 text-2xl font-bold leading-relaxed text-slate-900">
+                    {translatedText}
+                  </p>
+                  <button
+                    onClick={() => void copyText(translatedText, "번역 결과")}
+                    className="mt-2 text-sm font-semibold text-teal-700 underline"
+                  >
+                    번역 결과 복사
+                  </button>
+                </>
               ) : (
                 <p className="mt-3 text-sm text-slate-400">
                   한국어 문장을 입력한 뒤 <strong>번역하기</strong>를 눌러주세요.
@@ -815,6 +1371,74 @@ export default function Home() {
         {/* ── 장소 탭 ── */}
         {activeTab === "spot" && (
           <div className="grid grid-cols-1 gap-4">
+            <section className="ui-panel ui-appear rounded-2xl p-4">
+              <div className="flex items-center justify-between">
+                <h2 className="font-bold text-slate-800">오늘 코스 추천 · 동선 최적화</h2>
+                <button
+                  onClick={() => setSavedSpots([])}
+                  className="text-xs font-semibold text-slate-400 underline"
+                >
+                  저장 목록 비우기
+                </button>
+              </div>
+              <p className="mt-1 text-xs text-slate-500">
+                장소 카드에서 저장한 항목을 거리 기준으로 자동 정렬합니다.
+              </p>
+
+              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                <div className="rounded-xl bg-slate-100 px-3 py-2">
+                  <p className="text-xs text-slate-500">저장한 장소</p>
+                  <p className="text-lg font-black text-slate-800">{savedSpots.length}개</p>
+                </div>
+                <div className="rounded-xl bg-blue-50 px-3 py-2">
+                  <p className="text-xs text-blue-600">예상 이동거리</p>
+                  <p className="text-lg font-black text-blue-700">
+                    {optimizedRoute.totalDistanceKm.toFixed(2)} km
+                  </p>
+                </div>
+                <div className="rounded-xl bg-violet-50 px-3 py-2">
+                  <p className="text-xs text-violet-600">예상 이동시간</p>
+                  <p className="text-sm font-black text-violet-700">
+                    🚶 {routeTimeSummary.walkMin}분 · 🚌 {routeTimeSummary.transitMin}분
+                  </p>
+                </div>
+              </div>
+
+              {optimizedRoute.ordered.length > 0 && (
+                <div className="mt-3 grid gap-2">
+                  {optimizedRoute.ordered.map((spot, index) => (
+                    <div
+                      key={spot.id}
+                      className="flex items-center justify-between rounded-xl border border-white/70 bg-white/75 px-3 py-2"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-bold text-slate-800">
+                          {index + 1}. {spot.name}
+                        </p>
+                        <p className="truncate text-xs text-slate-500">{spot.address}</p>
+                      </div>
+                      <button
+                        onClick={() => setSavedSpots((prev) => prev.filter((item) => item.id !== spot.id))}
+                        className="ml-3 text-xs font-semibold text-slate-400 underline"
+                      >
+                        제거
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="mt-3 flex justify-end">
+                <button
+                  onClick={() => void shareSavedCourse()}
+                  disabled={savedSpots.length === 0}
+                  className="rounded-xl bg-gradient-to-r from-teal-700 to-cyan-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                >
+                  저장 코스 공유
+                </button>
+              </div>
+            </section>
+
             {/* 필터 바 */}
             <div className="ui-panel ui-appear rounded-2xl p-4">
               <div className="scrollbar-none flex gap-2 overflow-x-auto pb-0.5">
@@ -927,63 +1551,80 @@ export default function Home() {
                   </p>
                 ) : (
                   spots.map((spot) => (
-                    <button
+                    <article
                       key={spot.id}
-                      onClick={() => void loadSpotDetail(spot.id)}
                       className={`ui-panel flex gap-3 rounded-2xl p-4 text-left transition ${
                         selectedSpotId === spot.id
                           ? "border-teal-400 ring-1 ring-teal-300"
                           : "hover:border-slate-300"
                       }`}
                     >
-                      {/* 썸네일 */}
-                      <div className="shrink-0">
-                        {spot.photoUrl ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={spot.photoUrl}
-                            alt={spot.name}
-                            className="h-16 w-16 rounded-xl object-cover"
-                          />
-                        ) : (
-                          <div className="flex h-16 w-16 items-center justify-center rounded-xl bg-slate-100 text-2xl">
-                            {spot.type === "restaurant" ? "🍜" : spot.type === "cafe" ? "☕" : "🏛"}
-                          </div>
-                        )}
-                      </div>
+                      <button
+                        onClick={() => void loadSpotDetail(spot.id)}
+                        className="flex w-full gap-3 text-left"
+                      >
+                        {/* 썸네일 */}
+                        <div className="shrink-0">
+                          {spot.photoUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={spot.photoUrl}
+                              alt={spot.name}
+                              className="h-16 w-16 rounded-xl object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-16 w-16 items-center justify-center rounded-xl bg-slate-100 text-2xl">
+                              {spot.type === "restaurant" ? "🍜" : spot.type === "cafe" ? "☕" : "🏛"}
+                            </div>
+                          )}
+                        </div>
 
-                      {/* 정보 */}
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-start justify-between gap-2">
-                          <p className="truncate font-bold">{spot.name}</p>
-                          <span className="shrink-0 text-sm font-semibold text-amber-600">
-                            ★ {spot.rating?.toFixed(1) ?? "-"}
-                          </span>
+                        {/* 정보 */}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="truncate font-bold">{spot.name}</p>
+                            <span className="shrink-0 text-sm font-semibold text-amber-600">
+                              ★ {spot.rating?.toFixed(1) ?? "-"}
+                            </span>
+                          </div>
+                          <p className="mt-0.5 truncate text-xs text-slate-500">{spot.address}</p>
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
+                              {spot.distanceKm.toFixed(2)}km
+                            </span>
+                            {userLocation && (() => {
+                              const { walkMin, transitMin } = travelTime(spot.distanceKm);
+                              return (
+                                <>
+                                  <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-600">
+                                    🚶 {walkMin}분
+                                  </span>
+                                  <span className="rounded-full bg-violet-50 px-2 py-0.5 text-xs font-semibold text-violet-600">
+                                    🚌 {transitMin}분
+                                  </span>
+                                </>
+                              );
+                            })()}
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
+                              {spot.reason}
+                            </span>
+                          </div>
                         </div>
-                        <p className="mt-0.5 truncate text-xs text-slate-500">{spot.address}</p>
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
-                            {spot.distanceKm.toFixed(2)}km
-                          </span>
-                          {userLocation && (() => {
-                            const { walkMin, transitMin } = travelTime(spot.distanceKm);
-                            return (
-                              <>
-                                <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-600">
-                                  🚶 {walkMin}분
-                                </span>
-                                <span className="rounded-full bg-violet-50 px-2 py-0.5 text-xs font-semibold text-violet-600">
-                                  🚌 {transitMin}분
-                                </span>
-                              </>
-                            );
-                          })()}
-                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
-                            {spot.reason}
-                          </span>
-                        </div>
+                      </button>
+
+                      <div className="ml-2 flex flex-col items-end justify-between">
+                        <button
+                          onClick={() => toggleSavedSpot(normalizeSavedSpotFromList(spot))}
+                          className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                            isSavedSpot(spot.id)
+                              ? "bg-amber-100 text-amber-700"
+                              : "bg-slate-100 text-slate-600"
+                          }`}
+                        >
+                          {isSavedSpot(spot.id) ? "★ 저장됨" : "☆ 저장"}
+                        </button>
                       </div>
-                    </button>
+                    </article>
                   ))
                 )}
               </div>
@@ -1068,6 +1709,24 @@ export default function Home() {
                             </span>
                           </div>
                           <p className="mt-1 text-sm text-slate-500">{spotDetail.address}</p>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <button
+                              onClick={() => toggleSavedSpot(normalizeSavedSpotFromDetail(spotDetail))}
+                              className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                                isSavedSpot(spotDetail.id)
+                                  ? "bg-amber-100 text-amber-700"
+                                  : "bg-slate-100 text-slate-600"
+                              }`}
+                            >
+                              {isSavedSpot(spotDetail.id) ? "★ 코스에 저장됨" : "☆ 코스에 저장"}
+                            </button>
+                            <button
+                              onClick={() => void copyText(`${spotDetail.name} - ${spotDetail.address}`, "장소 정보")}
+                              className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600"
+                            >
+                              주소 복사
+                            </button>
+                          </div>
 
                           {spotDetail.phone && (
                             <a
@@ -1092,6 +1751,12 @@ export default function Home() {
                           {spotDetail.openingHours.length > 0 && (
                             <div className="mt-3 rounded-xl border border-white/70 bg-white/70 p-3">
                               <p className="text-xs font-bold text-slate-400">영업 시간</p>
+                              {todayOpeningInfo && (
+                                <div className="mt-1.5 rounded-lg bg-slate-100 px-2.5 py-2">
+                                  <p className="text-xs font-semibold text-slate-500">{todayOpeningInfo.status}</p>
+                                  <p className="mt-0.5 text-xs font-bold text-slate-700">{todayOpeningInfo.detail}</p>
+                                </div>
+                              )}
                               <ul className="mt-1 grid gap-0.5">
                                 {spotDetail.openingHours.map((line) => (
                                   <li key={line} className="text-xs text-slate-600">{line}</li>
@@ -1118,7 +1783,7 @@ export default function Home() {
                                 </div>
                               );
                             })()}
-                            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
                               <a
                                 href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
                                   `${spotDetail.lat},${spotDetail.lng}`
@@ -1141,7 +1806,23 @@ export default function Home() {
                                 }
                                 className="flex items-center justify-center gap-1 rounded-xl bg-slate-900 py-2.5 text-xs font-semibold text-white"
                               >
-                                🧭 길 안내
+                                🧭 자동차 길안내
+                              </a>
+                              <a
+                                href={
+                                  userLocation
+                                    ? `https://www.google.com/maps/dir/?api=1&travelmode=transit&origin=${encodeURIComponent(
+                                        `${userLocation.lat},${userLocation.lng}`
+                                      )}&destination=${encodeURIComponent(
+                                        `${spotDetail.lat},${spotDetail.lng}`
+                                      )}&destination_place_id=${encodeURIComponent(spotDetail.id)}`
+                                    : `https://www.google.com/maps/dir/?api=1&travelmode=transit&destination=${encodeURIComponent(
+                                        `${spotDetail.lat},${spotDetail.lng}`
+                                      )}&destination_place_id=${encodeURIComponent(spotDetail.id)}`
+                                }
+                                className="flex items-center justify-center gap-1 rounded-xl bg-violet-700 py-2.5 text-xs font-semibold text-white"
+                              >
+                                🚇 대중교통
                               </a>
                             </div>
                           </div>
