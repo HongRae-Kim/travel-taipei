@@ -148,7 +148,12 @@ export default function Home() {
   const [spotError, setSpotError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [sheetDragY, setSheetDragY] = useState(0);
   const touchStartX = useRef<number | null>(null);
+  const sheetDragYRef = useRef(0);
+  const sheetTouchStartY = useRef<number | null>(null);
+  const sheetCanDrag = useRef(false);
+  const lightboxOpenedAt = useRef(0);
   const lightboxImages = spotDetail?.photoUrls ?? [];
 
   useEffect(() => {
@@ -171,6 +176,15 @@ export default function Home() {
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
   }, [lightboxIndex, lightboxImages.length]);
+
+  useEffect(() => {
+    if (lightboxIndex === null) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [lightboxIndex]);
 
   // ── API 호출 ──────────────────────────────────────────────────────────
 
@@ -266,13 +280,74 @@ export default function Home() {
   }
 
   function closeDetail() {
+    sheetDragYRef.current = 0;
+    setSheetDragY(0);
+    sheetTouchStartY.current = null;
+    sheetCanDrag.current = false;
     setSelectedSpotId(null);
     setSpotDetail(null);
+  }
+
+  function openLightbox(index: number) {
+    lightboxOpenedAt.current = Date.now();
+    setLightboxIndex(index);
+  }
+
+  function closeLightboxFromBackdrop() {
+    // On some mobile browsers a ghost click right after opening can close immediately.
+    if (Date.now() - lightboxOpenedAt.current < 220) return;
+    setLightboxIndex(null);
+  }
+
+  function handleSheetTouchStart(e: React.TouchEvent<HTMLElement>) {
+    if (typeof window !== "undefined" && window.innerWidth >= 1024) return;
+    const sheet = e.currentTarget;
+    sheetTouchStartY.current = e.touches[0].clientY;
+    sheetCanDrag.current = sheet.scrollTop <= 0;
+    sheetDragYRef.current = 0;
+  }
+
+  function handleSheetTouchMove(e: React.TouchEvent<HTMLElement>) {
+    if (sheetTouchStartY.current === null) return;
+    const sheet = e.currentTarget;
+    const deltaY = e.touches[0].clientY - sheetTouchStartY.current;
+    if (!sheetCanDrag.current) {
+      if (sheet.scrollTop <= 0 && deltaY > 0) {
+        sheetCanDrag.current = true;
+      } else {
+        return;
+      }
+    }
+    if (deltaY <= 0) {
+      sheetDragYRef.current = 0;
+      setSheetDragY(0);
+      return;
+    }
+    // Prevent background rubber-band scroll while dragging the sheet down.
+    e.preventDefault();
+    const nextDragY = Math.min(deltaY, 260);
+    sheetDragYRef.current = nextDragY;
+    setSheetDragY(nextDragY);
+  }
+
+  function handleSheetTouchEnd() {
+    if (!sheetCanDrag.current) return;
+    const shouldClose = sheetDragYRef.current > 90;
+    sheetTouchStartY.current = null;
+    sheetCanDrag.current = false;
+    if (shouldClose) {
+      closeDetail();
+      return;
+    }
+    sheetDragYRef.current = 0;
+    setSheetDragY(0);
   }
 
   async function loadSpotDetail(spotId: string) {
     setLoadingDetail(true);
     setDetailError(null);
+    sheetDragYRef.current = 0;
+    setSheetDragY(0);
     setSelectedSpotId(spotId);
     try {
       const detail = await requestApi<SpotDetailResponse>(
@@ -300,8 +375,8 @@ export default function Home() {
       {/* 라이트박스 */}
       {lightboxIndex !== null && lightboxImages[lightboxIndex] && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm"
-          onClick={() => setLightboxIndex(null)}
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 backdrop-blur-sm"
+          onClick={closeLightboxFromBackdrop}
           onTouchStart={(e) => { touchStartX.current = e.touches[0].clientX; }}
           onTouchEnd={(e) => {
             if (touchStartX.current === null) return;
@@ -316,8 +391,9 @@ export default function Home() {
           <img
             src={lightboxImages[lightboxIndex]}
             alt="확대 이미지"
-            className="max-h-[90dvh] max-w-[80vw] rounded-2xl object-contain shadow-2xl"
+            className="no-touch-menu max-h-[90dvh] max-w-[80vw] select-none rounded-2xl object-contain shadow-2xl"
             onClick={(e) => e.stopPropagation()}
+            onContextMenu={(e) => e.preventDefault()}
             draggable={false}
           />
 
@@ -360,7 +436,7 @@ export default function Home() {
       )}
 
       {/* 헤더 */}
-      <header className="ui-header sticky top-0 z-30">
+      <header className="ui-header safe-top-inset sticky top-0 z-30">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
           <div className="flex items-center gap-2">
             <span className="text-xl">🇹🇼</span>
@@ -384,11 +460,11 @@ export default function Home() {
       </header>
 
       {/* 콘텐츠 */}
-      <main className="mx-auto max-w-5xl px-4 pb-24 pt-6 sm:pb-10">
+      <main className="mx-auto max-w-5xl px-4 pb-[calc(7rem+env(safe-area-inset-bottom))] pt-4 sm:pb-10 sm:pt-6">
 
         {/* ── 홈 탭 ── */}
         {activeTab === "home" && (
-          <div className="grid gap-4">
+          <div className="grid grid-cols-1 gap-4">
             <section className="ui-hero ui-appear rounded-3xl p-4 text-white sm:p-6">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/75">
                 Live Travel Snapshot
@@ -504,7 +580,7 @@ export default function Home() {
               {loadingSummary ? (
                 <p className="mt-4 text-sm text-slate-400">불러오는 중...</p>
               ) : exchange ? (
-                <div className="mt-4 grid gap-3">
+                <div className="mt-4 grid grid-cols-1 gap-3">
                   <p className="text-2xl font-black">
                     {exchange.baseRate.toFixed(2)}
                     <span className="ml-1 text-sm font-semibold text-slate-400">원 = 1 TWD</span>
@@ -558,7 +634,7 @@ export default function Home() {
 
         {/* ── 회화 탭 ── */}
         {activeTab === "phrase" && (
-          <div className="grid gap-4">
+          <div className="grid grid-cols-1 gap-4">
             {/* 카테고리 칩 */}
             <div className="flex flex-wrap gap-2">
               {PHRASE_CATEGORIES.map((cat) => (
@@ -577,7 +653,7 @@ export default function Home() {
             </div>
 
             {/* 문구 목록 */}
-            <div className="grid gap-2">
+            <div className="grid grid-cols-1 gap-2">
               {loadingPhrases ? (
                 <p className="py-10 text-center text-sm text-slate-400">불러오는 중...</p>
               ) : (
@@ -598,7 +674,7 @@ export default function Home() {
 
         {/* ── 장소 탭 ── */}
         {activeTab === "spot" && (
-          <div className="grid gap-4">
+          <div className="grid grid-cols-1 gap-4">
             {/* 필터 바 */}
             <div className="ui-panel ui-appear rounded-2xl p-4">
               <div className="scrollbar-none flex gap-2 overflow-x-auto pb-0.5">
@@ -653,12 +729,12 @@ export default function Home() {
                 </label>
               </div>
 
-              <div className="mt-3 flex items-center justify-between gap-2">
-                <div className="flex gap-2">
+              <div className="mt-3 grid gap-2 sm:flex sm:items-center sm:justify-between">
+                <div className="grid grid-cols-2 gap-2 sm:flex">
                   <button
                     onClick={() => void detectLocation()}
                     disabled={locating}
-                    className={`flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-semibold transition disabled:opacity-50 ${
+                    className={`flex w-full items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-sm font-semibold transition disabled:opacity-50 sm:w-auto sm:justify-start ${
                       userLocation
                         ? "border border-teal-300/80 bg-teal-100/70 text-teal-800"
                         : "bg-slate-900 text-white hover:bg-slate-800"
@@ -668,12 +744,12 @@ export default function Home() {
                   </button>
                   <button
                     onClick={() => void searchSpots()}
-                    className="rounded-xl bg-gradient-to-r from-teal-700 to-cyan-700 px-3 py-2 text-sm font-semibold text-white hover:from-teal-600 hover:to-cyan-600"
+                    className="w-full rounded-xl bg-gradient-to-r from-teal-700 to-cyan-700 px-3 py-2 text-sm font-semibold text-white hover:from-teal-600 hover:to-cyan-600 sm:w-auto"
                   >
                     조회
                   </button>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center justify-between gap-2 sm:justify-end">
                   <span className="text-xs text-slate-400">{spotCountLabel}</span>
                   {(userLocation || filters.minRating || filters.openNow) && (
                     <button
@@ -698,9 +774,9 @@ export default function Home() {
             )}
 
             {/* 장소 목록 + 상세 */}
-            <div className="grid gap-3 lg:grid-cols-[1fr_380px]">
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_380px]">
               {/* 목록 */}
-              <div className="grid gap-2 lg:max-h-[calc(100vh-220px)] lg:overflow-y-auto lg:pr-1">
+              <div className="grid grid-cols-1 gap-2 lg:max-h-[calc(100vh-220px)] lg:overflow-y-auto lg:pr-1">
                 {loadingSpots ? (
                   <p className="ui-panel rounded-2xl py-10 text-center text-sm text-slate-400">
                     장소를 불러오는 중...
@@ -781,13 +857,21 @@ export default function Home() {
                     onClick={closeDetail}
                   />
 
-                  <aside className="
+                  <aside
+                    style={{ transform: sheetDragY > 0 ? `translateY(${sheetDragY}px)` : undefined }}
+                    className="
                     ui-panel animate-slide-up overflow-y-auto
                     fixed inset-x-0 bottom-0 z-50 max-h-[88dvh] rounded-t-3xl
-                    lg:static lg:inset-auto lg:z-auto lg:max-h-[calc(100vh-220px)] lg:animate-none lg:rounded-2xl
-                  ">
+                    transition-transform duration-200 ease-out
+                    lg:static lg:inset-auto lg:z-auto lg:max-h-[calc(100vh-220px)] lg:animate-none lg:rounded-2xl lg:transition-none
+                  "
+                    onTouchStart={handleSheetTouchStart}
+                    onTouchMove={handleSheetTouchMove}
+                    onTouchEnd={handleSheetTouchEnd}
+                    onTouchCancel={handleSheetTouchEnd}
+                  >
                     {/* 핸들 + 닫기 (모바일만) */}
-                    <div className="sticky top-0 z-10 flex items-center justify-center rounded-t-3xl bg-white/80 px-4 pb-2 pt-3 backdrop-blur-sm lg:hidden">
+                    <div className="sticky top-0 z-10 flex touch-none items-center justify-center rounded-t-3xl bg-white/80 px-4 pb-2 pt-3 backdrop-blur-sm lg:hidden">
                       <div className="h-1 w-10 rounded-full bg-slate-200" />
                       <button
                         className="absolute right-3 flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-500"
@@ -806,14 +890,25 @@ export default function Home() {
                         {/* 대표 사진 */}
                         {spotDetail.photoUrls[0] ? (
                           <button
-                            className="relative w-full"
-                            onClick={() => setLightboxIndex(0)}
+                            className="relative w-full touch-manipulation"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              openLightbox(0);
+                            }}
+                            onTouchEnd={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              openLightbox(0);
+                            }}
+                            onContextMenu={(e) => e.preventDefault()}
                           >
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img
                               src={spotDetail.photoUrls[0]}
                               alt={spotDetail.name}
-                              className="h-48 w-full object-cover lg:rounded-t-2xl"
+                              className="no-touch-menu pointer-events-none h-48 w-full select-none object-cover lg:rounded-t-2xl"
+                              draggable={false}
                             />
                             <span className="absolute bottom-2 right-2 flex items-center gap-1 rounded-full bg-black/50 px-2 py-0.5 text-xs text-white">
                               🔍 클릭해서 확대
@@ -883,11 +978,11 @@ export default function Home() {
                                 </div>
                               );
                             })()}
-                            <div className="mt-2 grid grid-cols-2 gap-2">
+                            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
                               <a
-                                href={`https://www.google.com/maps/place/?q=place_id:${spotDetail.id}`}
-                                target="_blank"
-                                rel="noreferrer"
+                                href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                                  `${spotDetail.lat},${spotDetail.lng}`
+                                )}&query_place_id=${encodeURIComponent(spotDetail.id)}`}
                                 className="flex items-center justify-center gap-1 rounded-xl bg-blue-600 py-2.5 text-xs font-semibold text-white"
                               >
                                 🗺 구글맵에서 보기
@@ -895,11 +990,15 @@ export default function Home() {
                               <a
                                 href={
                                   userLocation
-                                    ? `https://www.google.com/maps/dir/${userLocation.lat},${userLocation.lng}/${spotDetail.lat},${spotDetail.lng}`
-                                    : `https://www.google.com/maps/dir//${spotDetail.lat},${spotDetail.lng}`
+                                    ? `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(
+                                        `${userLocation.lat},${userLocation.lng}`
+                                      )}&destination=${encodeURIComponent(
+                                        `${spotDetail.lat},${spotDetail.lng}`
+                                      )}&destination_place_id=${encodeURIComponent(spotDetail.id)}`
+                                    : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
+                                        `${spotDetail.lat},${spotDetail.lng}`
+                                      )}&destination_place_id=${encodeURIComponent(spotDetail.id)}`
                                 }
-                                target="_blank"
-                                rel="noreferrer"
                                 className="flex items-center justify-center gap-1 rounded-xl bg-slate-900 py-2.5 text-xs font-semibold text-white"
                               >
                                 🧭 길 안내
@@ -913,14 +1012,25 @@ export default function Home() {
                               {spotDetail.photoUrls.slice(1).map((url, i) => (
                                 <button
                                   key={i}
-                                  onClick={() => setLightboxIndex(i + 1)}
-                                  className="shrink-0"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    openLightbox(i + 1);
+                                  }}
+                                  onTouchEnd={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    openLightbox(i + 1);
+                                  }}
+                                  onContextMenu={(e) => e.preventDefault()}
+                                  className="shrink-0 touch-manipulation"
                                 >
                                   {/* eslint-disable-next-line @next/next/no-img-element */}
                                   <img
                                     src={url}
                                     alt={`${spotDetail.name} ${i + 2}`}
-                                    className="h-20 w-20 rounded-xl object-cover transition hover:opacity-80"
+                                    className="no-touch-menu pointer-events-none h-20 w-20 select-none rounded-xl object-cover transition hover:opacity-80"
+                                    draggable={false}
                                   />
                                 </button>
                               ))}
@@ -938,7 +1048,7 @@ export default function Home() {
       </main>
 
       {/* 모바일 하단 탭바 */}
-      <nav className="fixed bottom-0 left-0 right-0 z-30 border-t border-white/60 bg-slate-50/85 backdrop-blur sm:hidden">
+      <nav className="safe-bottom-nav fixed bottom-0 left-0 right-0 z-30 border-t border-white/60 bg-slate-50/85 backdrop-blur sm:hidden">
         <div className="grid grid-cols-3">
           {([
             { tab: "home" as Tab, icon: "🏠", label: "홈" },
