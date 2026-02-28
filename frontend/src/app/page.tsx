@@ -306,6 +306,7 @@ export default function Home() {
   const lightboxImages = spotDetail?.photoUrls ?? [];
   const [tripStartDate, setTripStartDate] = useState(() => toIsoDate(new Date()));
   const [tripDays, setTripDays] = useState("3");
+  const [customTotalBudgetInput, setCustomTotalBudgetInput] = useState("");
   const [familyMembers, setFamilyMembers] = useState<FamilyMember[]>(DEFAULT_FAMILY_MEMBERS);
   const [familyExpenses, setFamilyExpenses] = useState<FamilyExpenseRecord[]>([]);
   const [newMemberName, setNewMemberName] = useState("");
@@ -329,6 +330,7 @@ export default function Home() {
     const cachedFamilyPlan = readStorage<{
       tripStartDate?: string;
       tripDays: string;
+      customTotalBudgetInput?: string;
       familyMembers: FamilyMember[];
     }>(
       STORAGE_KEYS.familyPlan
@@ -350,6 +352,9 @@ export default function Home() {
       }
       if (cachedFamilyPlan.tripDays) {
         setTripDays(cachedFamilyPlan.tripDays);
+      }
+      if (typeof cachedFamilyPlan.customTotalBudgetInput === "string") {
+        setCustomTotalBudgetInput(cachedFamilyPlan.customTotalBudgetInput);
       }
     } else {
       const legacyBudget = readStorage<{ dailyBudgetTwd: string }>("travelTaipei:budget");
@@ -411,8 +416,13 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    writeStorage(STORAGE_KEYS.familyPlan, { tripStartDate, tripDays, familyMembers });
-  }, [tripStartDate, tripDays, familyMembers]);
+    writeStorage(STORAGE_KEYS.familyPlan, {
+      tripStartDate,
+      tripDays,
+      customTotalBudgetInput,
+      familyMembers,
+    });
+  }, [tripStartDate, tripDays, customTotalBudgetInput, familyMembers]);
 
   useEffect(() => {
     writeStorage(STORAGE_KEYS.familyExpenses, familyExpenses);
@@ -812,7 +822,11 @@ export default function Home() {
   const familyBudgetSummary = useMemo(() => {
     const days = Math.max(1, Number.parseInt(tripDays, 10) || 1);
     const totalDailyBudget = familyMembers.reduce((sum, member) => sum + member.dailyBudgetTwd, 0);
-    const totalTripBudget = totalDailyBudget * days;
+    const autoTotalTripBudget = totalDailyBudget * days;
+    const manualTotalBudget = Number(customTotalBudgetInput);
+    const hasCustomTotalBudget = Number.isFinite(manualTotalBudget) && manualTotalBudget > 0;
+    const totalTripBudget = hasCustomTotalBudget ? Math.round(manualTotalBudget) : autoTotalTripBudget;
+    const totalDailyPlanBudget = totalTripBudget / days;
     const spentTwd = familyExpenses.reduce((sum, expense) => sum + expense.amountTwd, 0);
     const spentKrw = familyExpenses.reduce((sum, expense) => sum + expense.amountKrw, 0);
     const remainTwd = Number((totalTripBudget - spentTwd).toFixed(2));
@@ -830,7 +844,10 @@ export default function Home() {
       days,
       startDate: parsedStartDate,
       totalDailyBudget,
+      totalDailyPlanBudget,
+      autoTotalTripBudget,
       totalTripBudget,
+      hasCustomTotalBudget,
       spentTwd: Number(spentTwd.toFixed(2)),
       spentKrw: Math.round(spentKrw),
       remainTwd,
@@ -839,7 +856,7 @@ export default function Home() {
       usagePercent,
       dailyAllowanceTwd,
     };
-  }, [tripStartDate, tripDays, familyMembers, familyExpenses]);
+  }, [tripStartDate, tripDays, customTotalBudgetInput, familyMembers, familyExpenses]);
 
   const memberExpenseSummary = useMemo(() => {
     const map = new Map<string, { spentTwd: number; spentKrw: number; expenseCount: number }>();
@@ -920,7 +937,7 @@ export default function Home() {
       date.setDate(startDate.getDate() + index);
       const key = toIsoDate(date);
       const spentTwd = spentByDate.get(key) ?? 0;
-      const plannedTwd = familyBudgetSummary.totalDailyBudget;
+      const plannedTwd = familyBudgetSummary.totalDailyPlanBudget;
       return {
         key,
         day: index + 1,
@@ -930,7 +947,7 @@ export default function Home() {
         remainTwd: plannedTwd - spentTwd,
       };
     });
-  }, [tripStartDate, familyExpenses, familyBudgetSummary.days, familyBudgetSummary.startDate, familyBudgetSummary.totalDailyBudget]);
+  }, [tripStartDate, familyExpenses, familyBudgetSummary.days, familyBudgetSummary.startDate, familyBudgetSummary.totalDailyPlanBudget]);
 
   const todayOpeningInfo = useMemo(
     () => (spotDetail ? getTodayOpeningInfo(spotDetail.openingHours) : null),
@@ -1382,6 +1399,9 @@ export default function Home() {
                   <p className="text-base font-black text-blue-700">
                     {Math.round(familyBudgetSummary.totalTripBudget).toLocaleString()} TWD
                   </p>
+                  <p className="mt-0.5 text-[11px] font-semibold text-blue-500">
+                    {familyBudgetSummary.hasCustomTotalBudget ? "직접 설정" : "구성원 합산"}
+                  </p>
                 </div>
                 <div
                   className={`rounded-xl px-3 py-2 text-center ${familyBudgetSummary.remainTwd >= 0 ? "bg-emerald-50" : "bg-rose-50"}`}
@@ -1453,7 +1473,7 @@ export default function Home() {
 
             <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
               <h3 className="font-bold text-slate-800">여행 일정 설정</h3>
-              <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_140px]">
+              <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_130px_180px_auto]">
                 <label className="grid gap-1">
                   <span className="text-xs font-semibold text-slate-500">시작일</span>
                   <input
@@ -1474,7 +1494,29 @@ export default function Home() {
                     className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
                   />
                 </label>
+                <label className="grid gap-1">
+                  <span className="text-xs font-semibold text-slate-500">총 예산(TWD)</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={customTotalBudgetInput}
+                    onChange={(e) => setCustomTotalBudgetInput(e.target.value)}
+                    className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
+                    placeholder="비우면 자동 계산"
+                  />
+                </label>
+                <button
+                  onClick={() => setCustomTotalBudgetInput("")}
+                  disabled={!customTotalBudgetInput}
+                  className="mt-6 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-600 disabled:opacity-50"
+                >
+                  자동 계산 사용
+                </button>
               </div>
+              <p className="mt-2 text-xs text-slate-500">
+                자동 계산값: {Math.round(familyBudgetSummary.autoTotalTripBudget).toLocaleString()} TWD
+                (구성원 일일 예산 합계 × 여행 일수)
+              </p>
             </section>
 
             <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
