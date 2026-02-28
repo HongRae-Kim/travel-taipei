@@ -2,9 +2,9 @@ spring:
   application:
     name: travel-taipei-backend
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/travel_taipei}
-    username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD:}
+    url: jdbc:postgresql://${PGHOST:localhost}:${PGPORT:5432}/${PGDATABASE:travel_taipei}
+    username: ${PGUSER:postgres}
+    password: ${PGPASSWORD:}
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
@@ -17,8 +17,9 @@ spring:
           import_files_sql_extractor: org.hibernate.tool.schema.internal.script.MultiLineSqlScriptExtractor
   data:
     redis:
-      host: ${REDIS_HOST:localhost}
-      port: ${REDIS_PORT:6379}
+      host: ${REDISHOST:localhost}
+      port: ${REDISPORT:6379}
+      password: ${REDISPASSWORD:}
 
 external:
   client:
@@ -36,3 +37,6 @@ external:
 
 server:
   port: 8080
+
+allowed:
+  origins: ${ALLOWED_ORIGINS:http://localhost:3000}
