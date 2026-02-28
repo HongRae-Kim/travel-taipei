@@ -137,12 +137,25 @@ const QUICK_TRANSLATE_SAMPLES = [
 
 type Tab = "home" | "phrase" | "translate" | "spot" | "budget";
 
+type BudgetMobileView = "overview" | "itinerary" | "expenses" | "insights";
+
 const TAB_ITEMS: Array<{ tab: Tab; icon: string; label: string }> = [
   { tab: "home", icon: "🏠", label: "홈" },
   { tab: "phrase", icon: "💬", label: "회화" },
   { tab: "translate", icon: "🈶", label: "번역" },
   { tab: "spot", icon: "📍", label: "장소" },
   { tab: "budget", icon: "💰", label: "예산" },
+];
+
+const BUDGET_MOBILE_VIEW_ITEMS: Array<{
+  key: BudgetMobileView;
+  icon: string;
+  label: string;
+}> = [
+  { key: "overview", icon: "📊", label: "요약" },
+  { key: "itinerary", icon: "🗓", label: "일정표" },
+  { key: "expenses", icon: "🧾", label: "지출" },
+  { key: "insights", icon: "📈", label: "분석" },
 ];
 
 const STORAGE_KEYS = {
@@ -416,6 +429,7 @@ export default function Home() {
   const lightboxImages = spotDetail?.photoUrls ?? [];
   const [tripStartDate, setTripStartDate] = useState(() => toIsoDate(new Date()));
   const [tripDays, setTripDays] = useState("3");
+  const [budgetMobileView, setBudgetMobileView] = useState<BudgetMobileView>("overview");
   const [customTotalBudgetInput, setCustomTotalBudgetInput] = useState("");
   const [itineraryPlan, setItineraryPlan] = useState<ItineraryPlanItem[]>([]);
   const [planDayInput, setPlanDayInput] = useState("1");
@@ -1252,6 +1266,10 @@ export default function Home() {
     [spotDetail]
   );
 
+  function budgetSectionClass(view: BudgetMobileView) {
+    return budgetMobileView === view ? "block" : "hidden sm:block";
+  }
+
   // ── UI ───────────────────────────────────────────────────────────────
 
   return (
@@ -1392,7 +1410,7 @@ export default function Home() {
             )}
 
             {/* 날씨 */}
-            <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
+            <section className={`${budgetSectionClass("itinerary")} ui-panel ui-appear rounded-2xl p-4 sm:p-5`}>
               <div className="flex items-center justify-between">
                 <h2 className="font-bold text-slate-800">타이베이 현재 날씨</h2>
                 <button
@@ -1470,7 +1488,7 @@ export default function Home() {
             )}
 
             {/* 환율 */}
-            <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
+            <section className={`${budgetSectionClass("expenses")} ui-panel ui-appear rounded-2xl p-4 sm:p-5`}>
               <h2 className="font-bold text-slate-700">환율 · KRW ↔ TWD</h2>
               {loadingSummary ? (
                 <p className="mt-4 text-sm text-slate-400">불러오는 중...</p>
@@ -1584,7 +1602,7 @@ export default function Home() {
               </p>
             </section>
 
-            <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
+            <section className={`${budgetSectionClass("expenses")} ui-panel ui-appear rounded-2xl p-4 sm:p-5`}>
               <div className="flex items-center justify-between">
                 <h3 className="font-bold text-slate-800">번역할 한국어 문장</h3>
                 <span className="text-xs font-semibold text-slate-400">
@@ -1672,7 +1690,23 @@ export default function Home() {
               </p>
             </section>
 
-            <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
+            <div className="scrollbar-none -mx-1 flex gap-2 overflow-x-auto px-1 sm:hidden">
+              {BUDGET_MOBILE_VIEW_ITEMS.map((item) => (
+                <button
+                  key={item.key}
+                  onClick={() => setBudgetMobileView(item.key)}
+                  className={`shrink-0 rounded-xl border px-3 py-2 text-xs font-semibold transition ${
+                    budgetMobileView === item.key
+                      ? "border-teal-300 bg-teal-50 text-teal-700"
+                      : "border-white/70 bg-white/75 text-slate-500"
+                  }`}
+                >
+                  {item.icon} {item.label}
+                </button>
+              ))}
+            </div>
+
+            <section className={`${budgetSectionClass("overview")} ui-panel ui-appear rounded-2xl p-4 sm:p-5`}>
               <div className="flex items-center justify-between">
                 <h2 className="font-bold text-slate-800">예산 요약</h2>
                 <button
@@ -1767,54 +1801,54 @@ export default function Home() {
                   </span>
                 </p>
               </div>
-            </section>
 
-            <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
-              <h3 className="font-bold text-slate-800">여행 일정 설정</h3>
-              <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_130px_180px_auto]">
-                <label className="grid gap-1">
-                  <span className="text-xs font-semibold text-slate-500">시작일</span>
-                  <input
-                    type="date"
-                    value={tripStartDate}
-                    onChange={(e) => setTripStartDate(e.target.value)}
-                    className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
-                  />
-                </label>
-                <label className="grid gap-1">
-                  <span className="text-xs font-semibold text-slate-500">여행 일수</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={30}
-                    value={tripDays}
-                    onChange={(e) => setTripDays(e.target.value)}
-                    className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
-                  />
-                </label>
-                <label className="grid gap-1">
-                  <span className="text-xs font-semibold text-slate-500">총 예산(TWD)</span>
-                  <input
-                    type="number"
-                    min={1}
-                    value={customTotalBudgetInput}
-                    onChange={(e) => setCustomTotalBudgetInput(e.target.value)}
-                    className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
-                    placeholder="비우면 자동 계산"
-                  />
-                </label>
-                <button
-                  onClick={() => setCustomTotalBudgetInput("")}
-                  disabled={!customTotalBudgetInput}
-                  className="mt-6 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-600 disabled:opacity-50"
-                >
-                  자동 계산 사용
-                </button>
+              <div className="mt-3 border-t border-slate-100 pt-3">
+                <h3 className="font-bold text-slate-800">여행 일정 설정</h3>
+                <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_130px_180px_auto]">
+                  <label className="grid gap-1">
+                    <span className="text-xs font-semibold text-slate-500">시작일</span>
+                    <input
+                      type="date"
+                      value={tripStartDate}
+                      onChange={(e) => setTripStartDate(e.target.value)}
+                      className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
+                    />
+                  </label>
+                  <label className="grid gap-1">
+                    <span className="text-xs font-semibold text-slate-500">여행 일수</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={30}
+                      value={tripDays}
+                      onChange={(e) => setTripDays(e.target.value)}
+                      className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
+                    />
+                  </label>
+                  <label className="grid gap-1">
+                    <span className="text-xs font-semibold text-slate-500">총 예산(TWD)</span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={customTotalBudgetInput}
+                      onChange={(e) => setCustomTotalBudgetInput(e.target.value)}
+                      className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
+                      placeholder="비우면 자동 계산"
+                    />
+                  </label>
+                  <button
+                    onClick={() => setCustomTotalBudgetInput("")}
+                    disabled={!customTotalBudgetInput}
+                    className="mt-6 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-600 disabled:opacity-50"
+                  >
+                    자동 계산 사용
+                  </button>
+                </div>
+                <p className="mt-2 text-xs text-slate-500">
+                  자동 계산값: {Math.round(familyBudgetSummary.autoTotalTripBudget).toLocaleString()} TWD
+                  (구성원 일일 예산 합계 × 여행 일수)
+                </p>
               </div>
-              <p className="mt-2 text-xs text-slate-500">
-                자동 계산값: {Math.round(familyBudgetSummary.autoTotalTripBudget).toLocaleString()} TWD
-                (구성원 일일 예산 합계 × 여행 일수)
-              </p>
             </section>
 
             <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
@@ -2171,7 +2205,11 @@ export default function Home() {
               </div>
             </section>
 
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <div
+              className={`${
+                budgetMobileView === "insights" ? "grid" : "hidden sm:grid"
+              } grid-cols-1 gap-4 lg:grid-cols-2`}
+            >
               <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
                 <h3 className="font-bold text-slate-800">카테고리별 지출 분석</h3>
                 <div className="mt-3 grid gap-2">
