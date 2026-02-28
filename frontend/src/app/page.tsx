@@ -101,7 +101,7 @@ type ItineraryPlanItem = {
   place: string;
   activity: string;
   category: ExpenseCategory;
-  estimatedCostTwd: number;
+  estimatedCostTwd: number | null;
   isExample?: boolean;
 };
 
@@ -529,7 +529,11 @@ export default function Home() {
         cachedItinerary
           .map((item) => {
             const day = Number(item.day);
-            const estimatedCostTwd = Number(item.estimatedCostTwd);
+            const rawEstimatedCost = (item as { estimatedCostTwd?: unknown }).estimatedCostTwd;
+            const estimatedCostTwd =
+              rawEstimatedCost === null || rawEstimatedCost === undefined || rawEstimatedCost === ""
+                ? null
+                : Number(rawEstimatedCost);
             const nextCategory = isExpenseCategory(String(item.category))
               ? item.category
               : "other";
@@ -541,9 +545,11 @@ export default function Home() {
               activity: item.activity?.trim() || "일정",
               category: nextCategory,
               estimatedCostTwd:
-                Number.isFinite(estimatedCostTwd) && estimatedCostTwd >= 0
+                estimatedCostTwd !== null &&
+                Number.isFinite(estimatedCostTwd) &&
+                estimatedCostTwd >= 0
                   ? Math.round(estimatedCostTwd)
-                  : 0,
+                  : null,
               isExample: Boolean(item.isExample),
             };
           })
@@ -826,7 +832,9 @@ export default function Home() {
   function addItineraryPlanItem() {
     const days = Math.max(1, Number.parseInt(tripDays, 10) || 1);
     const day = Number.parseInt(planDayInput, 10);
-    const estimatedCostTwd = Number(planCostInput);
+    const rawEstimatedCostInput = planCostInput.trim();
+    const estimatedCostTwd =
+      rawEstimatedCostInput === "" ? null : Number(rawEstimatedCostInput);
     if (!Number.isFinite(day) || day < 1 || day > days) {
       setPlanError(`일차는 1~${days} 범위로 입력해주세요.`);
       return;
@@ -843,7 +851,10 @@ export default function Home() {
       setPlanError("일정 내용을 입력해주세요.");
       return;
     }
-    if (!Number.isFinite(estimatedCostTwd) || estimatedCostTwd < 0) {
+    if (
+      rawEstimatedCostInput !== "" &&
+      (!Number.isFinite(estimatedCostTwd) || (estimatedCostTwd ?? 0) < 0)
+    ) {
       setPlanError("예상 비용(TWD)을 올바르게 입력해주세요.");
       return;
     }
@@ -858,7 +869,8 @@ export default function Home() {
           place: planPlaceInput.trim(),
           activity: planActivityInput.trim(),
           category: planCategoryInput,
-          estimatedCostTwd: Math.round(estimatedCostTwd),
+          estimatedCostTwd:
+            estimatedCostTwd === null ? null : Math.round(estimatedCostTwd),
           isExample: false,
         },
       ].sort((a, b) => a.day - b.day || a.time.localeCompare(b.time))
@@ -874,7 +886,32 @@ export default function Home() {
     setItineraryPlan((prev) => prev.filter((item) => item.id !== itemId));
   }
 
-  function resetExampleItinerary() {
+  function updateItineraryPlanCost(itemId: string, rawCost: string) {
+    const trimmed = rawCost.trim();
+    const parsedCost = trimmed === "" ? null : Number(trimmed);
+    if (trimmed !== "" && (!Number.isFinite(parsedCost) || (parsedCost ?? 0) < 0)) return;
+    setItineraryPlan((prev) =>
+      prev.map((item) =>
+        item.id === itemId
+          ? {
+              ...item,
+              estimatedCostTwd:
+                parsedCost === null ? null : Math.round(parsedCost),
+            }
+          : item
+      )
+    );
+  }
+
+  function increaseTripDays() {
+    const currentDays = Math.max(1, Number.parseInt(tripDays, 10) || 1);
+    if (currentDays >= 30) return;
+    const nextDays = currentDays + 1;
+    setTripDays(String(nextDays));
+    setPlanDayInput(String(nextDays));
+  }
+
+  function loadDefaultItineraryPlan() {
     const days = Math.max(1, Number.parseInt(tripDays, 10) || 1);
     setItineraryPlan(buildExampleItinerary(days));
     setPlanError(null);
@@ -1172,14 +1209,17 @@ export default function Home() {
   const itinerarySummary = useMemo(() => {
     const maxDay = familyBudgetSummary.days;
     const visibleItems = itineraryPlan.filter((item) => item.day >= 1 && item.day <= maxDay);
-    const totalEstimatedCostTwd = visibleItems.reduce((sum, item) => sum + item.estimatedCostTwd, 0);
-    const exampleCount = visibleItems.filter((item) => item.isExample).length;
+    const totalEstimatedCostTwd = visibleItems.reduce(
+      (sum, item) => sum + (item.estimatedCostTwd ?? 0),
+      0
+    );
     const hiddenCount = itineraryPlan.length - visibleItems.length;
+    const pendingCostCount = visibleItems.filter((item) => item.estimatedCostTwd === null).length;
     return {
       totalEstimatedCostTwd,
       itemCount: visibleItems.length,
-      exampleCount,
       hiddenCount,
+      pendingCostCount,
       avgDailyCostTwd: maxDay > 0 ? totalEstimatedCostTwd / maxDay : 0,
     };
   }, [itineraryPlan, familyBudgetSummary.days]);
@@ -1195,7 +1235,7 @@ export default function Home() {
       const items = itineraryPlan
         .filter((item) => item.day === day)
         .sort((a, b) => a.time.localeCompare(b.time));
-      const estimatedCostTwd = items.reduce((sum, item) => sum + item.estimatedCostTwd, 0);
+      const estimatedCostTwd = items.reduce((sum, item) => sum + (item.estimatedCostTwd ?? 0), 0);
       const dayBudgetTwd = budgetByDay.get(day) ?? 0;
       return {
         day,
@@ -1779,12 +1819,12 @@ export default function Home() {
 
             <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
               <div className="flex items-center justify-between gap-2">
-                <h3 className="font-bold text-slate-800">여행 일정표 예시 · 시간/장소/비용</h3>
+                <h3 className="font-bold text-slate-800">여행 일정표 · 시간/장소/비용</h3>
                 <button
-                  onClick={resetExampleItinerary}
+                  onClick={loadDefaultItineraryPlan}
                   className="text-xs font-semibold text-slate-500 underline"
                 >
-                  예시 일정 다시 불러오기
+                  기본 일정 불러오기
                 </button>
               </div>
               <p className="mt-1 text-xs text-slate-500">
@@ -1809,12 +1849,12 @@ export default function Home() {
                   </p>
                 </div>
                 <div className="rounded-xl bg-teal-50 px-3 py-2 text-center">
-                  <p className="text-xs text-teal-700">예시 포함</p>
-                  <p className="text-base font-black text-teal-800">{itinerarySummary.exampleCount}개</p>
+                  <p className="text-xs text-teal-700">금액 미입력</p>
+                  <p className="text-base font-black text-teal-800">{itinerarySummary.pendingCostCount}개</p>
                 </div>
               </div>
 
-              <div className="mt-3 grid gap-2 sm:grid-cols-[90px_110px_130px_1fr_1fr_130px_auto]">
+              <div className="mt-3 grid gap-2 sm:grid-cols-[90px_auto_110px_130px_1fr_1fr_130px_auto]">
                 <select
                   value={planDayInput}
                   onChange={(e) => setPlanDayInput(e.target.value)}
@@ -1829,6 +1869,13 @@ export default function Home() {
                     );
                   })}
                 </select>
+                <button
+                  onClick={increaseTripDays}
+                  disabled={familyBudgetSummary.days >= 30}
+                  className="rounded-xl border border-teal-300/70 bg-teal-50 px-3 py-2 text-xs font-semibold text-teal-700 disabled:opacity-50"
+                >
+                  일차 +1
+                </button>
                 <input
                   type="time"
                   value={planTimeInput}
@@ -1866,7 +1913,7 @@ export default function Home() {
                   value={planCostInput}
                   onChange={(e) => setPlanCostInput(e.target.value)}
                   className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
-                  placeholder="예상비용(TWD)"
+                  placeholder="비워두면 나중에 입력"
                 />
                 <button
                   onClick={addItineraryPlanItem}
@@ -1875,6 +1922,9 @@ export default function Home() {
                   일정 추가
                 </button>
               </div>
+              <p className="mt-2 text-xs text-slate-500">
+                일차 +1 버튼으로 여행 일정을 30일까지 늘릴 수 있고, 금액은 비워둔 뒤 나중에 입력 가능합니다.
+              </p>
 
               {planError && (
                 <p className="mt-2 text-sm font-semibold text-rose-600">{planError}</p>
@@ -1915,16 +1965,24 @@ export default function Home() {
                           return (
                             <div
                               key={item.id}
-                              className="grid items-center gap-2 rounded-lg border border-slate-100 bg-white px-2 py-2 sm:grid-cols-[72px_1fr_auto_auto]"
+                              className="grid items-center gap-2 rounded-lg border border-slate-100 bg-white px-2 py-2 sm:grid-cols-[72px_1fr_140px_auto]"
                             >
                               <p className="text-sm font-bold text-slate-700">{item.time}</p>
                               <div className="min-w-0">
                                 <p className="truncate text-sm font-semibold text-slate-800">{item.place}</p>
                                 <p className="truncate text-xs text-slate-500">{item.activity}</p>
+                                <p className="truncate text-[11px] text-slate-400">
+                                  {category.icon} {category.label}
+                                </p>
                               </div>
-                              <p className="text-xs font-semibold text-slate-500">
-                                {category.icon} {category.label} · {Math.round(item.estimatedCostTwd).toLocaleString()} TWD
-                              </p>
+                              <input
+                                type="number"
+                                min={0}
+                                value={item.estimatedCostTwd ?? ""}
+                                onChange={(e) => updateItineraryPlanCost(item.id, e.target.value)}
+                                className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-right text-sm font-semibold text-slate-700 outline-none ring-teal-400/30 focus:ring"
+                                placeholder="금액 추가"
+                              />
                               <button
                                 onClick={() => removeItineraryPlanItem(item.id)}
                                 className="text-[11px] font-semibold text-slate-400 underline"
