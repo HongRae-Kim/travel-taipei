@@ -2,6 +2,9 @@
 .claude
 CLAUDE.md
 
+### IDE ###
+.vscode/
+
 ### Terraform ###
 infra/.terraform/
 infra/.terraform.lock.hcl

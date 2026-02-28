@@ -1,9 +1,0 @@
-{
-  "/api/travel/exchange-rates/route": "app/api/travel/exchange-rates/route.js",
-  "/api/travel/phrases/[category]/route": "app/api/travel/phrases/[category]/route.js",
-  "/api/travel/spots/[placeId]/route": "app/api/travel/spots/[placeId]/route.js",
-  "/api/travel/spots/route": "app/api/travel/spots/route.js",
-  "/api/travel/weather/forecast/route": "app/api/travel/weather/forecast/route.js",
-  "/api/travel/weather/route": "app/api/travel/weather/route.js",
-  "/page": "app/page.js"
-}
