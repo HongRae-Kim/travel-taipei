@@ -76,6 +76,15 @@ type TranslationResult = {
   targetLang: string;
 };
 
+type TranslateLanguage = "ko" | "zh-TW";
+
+type TranslateDirection = "ko_to_zhTW" | "zhTW_to_ko";
+
+type TranslationHistoryItem = TranslationResult & {
+  id: string;
+  createdAt: string;
+};
+
 type FamilyMember = {
   id: string;
   name: string;
@@ -128,12 +137,55 @@ const PHRASE_CATEGORIES = [
   { value: "emergency", label: "🚨 긴급" },
 ];
 
-const QUICK_TRANSLATE_SAMPLES = [
-  "안녕하세요. 한국에서 왔어요.",
-  "이 근처 추천 음식점이 어디예요?",
-  "지하철역까지 어떻게 가나요?",
-  "카드 결제 가능한가요?",
-];
+const TRANSLATE_DIRECTION_META: Record<
+  TranslateDirection,
+  {
+    sourceLang: TranslateLanguage;
+    targetLang: TranslateLanguage;
+    sourceLabel: string;
+    targetLabel: string;
+    badge: string;
+    title: string;
+    helper: string;
+    placeholder: string;
+  }
+> = {
+  ko_to_zhTW: {
+    sourceLang: "ko",
+    targetLang: "zh-TW",
+    sourceLabel: "한국어",
+    targetLabel: "대만 번체 중국어",
+    badge: "Korean → Traditional Chinese",
+    title: "한국어를 대만 번체 중국어로 바로 번역",
+    helper: "택시, 식당, 길찾기에서 바로 보여줄 문장을 빠르게 만들 수 있어요.",
+    placeholder: "예) 이 근처에서 야시장 가려면 어떻게 가나요?",
+  },
+  zhTW_to_ko: {
+    sourceLang: "zh-TW",
+    targetLang: "ko",
+    sourceLabel: "대만 번체 중국어",
+    targetLabel: "한국어",
+    badge: "Traditional Chinese → Korean",
+    title: "대만 번체 중국어를 한국어로 바로 번역",
+    helper: "현지 문구를 한국어로 빠르게 확인할 수 있어요.",
+    placeholder: "예) 這附近有推薦的餐廳嗎？",
+  },
+};
+
+const QUICK_TRANSLATE_SAMPLES: Record<TranslateDirection, string[]> = {
+  ko_to_zhTW: [
+    "안녕하세요. 한국에서 왔어요.",
+    "이 근처 추천 음식점이 어디예요?",
+    "지하철역까지 어떻게 가나요?",
+    "카드 결제 가능한가요?",
+  ],
+  zhTW_to_ko: [
+    "你好，我是從韓國來的。",
+    "這附近有推薦的餐廳嗎？",
+    "請問捷運站怎麼走？",
+    "可以刷卡嗎？",
+  ],
+};
 
 type Tab = "home" | "phrase" | "translate" | "spot" | "budget";
 
@@ -165,7 +217,8 @@ const STORAGE_KEYS = {
   phrasesPrefix: "travelTaipei:phrases:",
   spotsPrefix: "travelTaipei:spots:",
   spotDetailPrefix: "travelTaipei:spotDetail:",
-  translatePrefix: "travelTaipei:translate:ko-zhTW:",
+  translatePrefix: "travelTaipei:translate:",
+  translateHistory: "travelTaipei:translate:history",
 };
 
 const WEEKDAY_KO = [
@@ -304,6 +357,14 @@ function makeSpotsCacheKey(nextFilters: SpotFilters, loc: { lat: number; lng: nu
   return `${STORAGE_KEYS.spotsPrefix}${nextFilters.type}:${nextFilters.radius}:${nextFilters.openNow}:${nextFilters.minRating || "all"}:${lat}:${lng}`;
 }
 
+function makeTranslateCacheKey(sourceLang: TranslateLanguage, targetLang: TranslateLanguage, sourceText: string) {
+  return `${STORAGE_KEYS.translatePrefix}${sourceLang}-${targetLang}:${sourceText}`;
+}
+
+function isSupportedTranslateLang(value: string): value is TranslateLanguage {
+  return value === "ko" || value === "zh-TW";
+}
+
 function isExpenseCategory(value: string): value is ExpenseCategory {
   return EXPENSE_CATEGORY_META.some((item) => item.value === value);
 }
@@ -401,8 +462,10 @@ export default function Home() {
   const [phrases, setPhrases] = useState<PhraseResponse[]>([]);
   const [selectedCategory, setSelectedCategory] = useState("airport");
   const [loadingPhrases, setLoadingPhrases] = useState(false);
+  const [translateDirection, setTranslateDirection] = useState<TranslateDirection>("ko_to_zhTW");
   const [translateInput, setTranslateInput] = useState("안녕하세요. 한국에서 왔어요.");
   const [translatedText, setTranslatedText] = useState("");
+  const [translateHistory, setTranslateHistory] = useState<TranslationHistoryItem[]>([]);
   const [loadingTranslate, setLoadingTranslate] = useState(false);
   const [translateError, setTranslateError] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(true);
@@ -448,6 +511,8 @@ export default function Home() {
   const [expenseKrwInput, setExpenseKrwInput] = useState("");
   const [expenseNoteInput, setExpenseNoteInput] = useState("");
   const [budgetError, setBudgetError] = useState<string | null>(null);
+  const activeTranslateMeta = TRANSLATE_DIRECTION_META[translateDirection];
+  const quickTranslateSamples = QUICK_TRANSLATE_SAMPLES[translateDirection];
 
   useEffect(() => {
     void loadSummary();
@@ -574,6 +639,29 @@ export default function Home() {
       setItineraryPlan(buildExampleItinerary(daysFromPlan));
     }
 
+    const cachedTranslateHistory = readStorage<TranslationHistoryItem[]>(STORAGE_KEYS.translateHistory);
+    if (cachedTranslateHistory?.length) {
+      setTranslateHistory(
+        cachedTranslateHistory
+          .map((item) => ({
+            id: item.id || `translate-${Date.now()}-${Math.round(Math.random() * 1000)}`,
+            sourceText: item.sourceText?.trim() || "",
+            translatedText: item.translatedText?.trim() || "",
+            sourceLang: item.sourceLang,
+            targetLang: item.targetLang,
+            createdAt: item.createdAt || new Date().toISOString(),
+          }))
+          .filter(
+            (item) =>
+              item.sourceText.length > 0 &&
+              item.translatedText.length > 0 &&
+              isSupportedTranslateLang(item.sourceLang) &&
+              isSupportedTranslateLang(item.targetLang)
+          )
+          .slice(0, 10)
+      );
+    }
+
     const updateNetworkState = () => setIsOnline(window.navigator.onLine);
     updateNetworkState();
     window.addEventListener("online", updateNetworkState);
@@ -596,6 +684,10 @@ export default function Home() {
   useEffect(() => {
     writeStorage(STORAGE_KEYS.familyExpenses, familyExpenses);
   }, [familyExpenses]);
+
+  useEffect(() => {
+    writeStorage(STORAGE_KEYS.translateHistory, translateHistory);
+  }, [translateHistory]);
 
   useEffect(() => {
     writeStorage(STORAGE_KEYS.itineraryPlan, itineraryPlan);
@@ -692,22 +784,56 @@ export default function Home() {
     void loadPhrases(category);
   }
 
-  async function translateKoreanToTraditionalChinese(input?: string) {
+  function pushTranslateHistory(result: TranslationResult) {
+    if (
+      !result.sourceText.trim() ||
+      !result.translatedText.trim() ||
+      !isSupportedTranslateLang(result.sourceLang) ||
+      !isSupportedTranslateLang(result.targetLang)
+    ) {
+      return;
+    }
+    setTranslateHistory((prev) => {
+      const deduped = prev.filter(
+        (item) =>
+          !(
+            item.sourceText === result.sourceText &&
+            item.sourceLang === result.sourceLang &&
+            item.targetLang === result.targetLang
+          )
+      );
+      return [
+        {
+          id: `translate-${Date.now()}-${Math.round(Math.random() * 1000)}`,
+          createdAt: new Date().toISOString(),
+          ...result,
+        },
+        ...deduped,
+      ].slice(0, 10);
+    });
+  }
+
+  async function translateText(input?: string, direction = translateDirection) {
     const sourceText = (input ?? translateInput).trim();
+    const meta = TRANSLATE_DIRECTION_META[direction];
     if (!sourceText) {
       setTranslatedText("");
-      setTranslateError("번역할 한국어 문장을 입력해주세요.");
+      setTranslateError(`번역할 ${meta.sourceLabel} 문장을 입력해주세요.`);
       return;
     }
 
     setLoadingTranslate(true);
     setTranslateError(null);
-    const translateCacheKey = `${STORAGE_KEYS.translatePrefix}${sourceText}`;
+    const translateCacheKey = makeTranslateCacheKey(meta.sourceLang, meta.targetLang, sourceText);
     try {
       const response = await fetch("/api/travel/translate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: sourceText }),
+        body: JSON.stringify({
+          text: sourceText,
+          source: meta.sourceLang,
+          target: meta.targetLang,
+        }),
       });
 
       const payload = (await response.json()) as ApiEnvelope<TranslationResult>;
@@ -716,11 +842,13 @@ export default function Home() {
       }
       setTranslatedText(payload.data.translatedText);
       writeStorage(translateCacheKey, payload.data);
+      pushTranslateHistory(payload.data);
     } catch (error) {
       const cached = readStorage<TranslationResult>(translateCacheKey);
       if (cached?.translatedText) {
         setTranslatedText(cached.translatedText);
         setTranslateError("오프라인 캐시 번역을 표시 중입니다.");
+        pushTranslateHistory(cached);
       } else {
         setTranslatedText("");
         setTranslateError(error instanceof Error ? error.message : "번역 요청에 실패했습니다.");
@@ -732,7 +860,34 @@ export default function Home() {
 
   function applySampleSentence(sentence: string) {
     setTranslateInput(sentence);
-    void translateKoreanToTraditionalChinese(sentence);
+    void translateText(sentence);
+  }
+
+  function reverseTranslateDirection() {
+    const nextDirection: TranslateDirection =
+      translateDirection === "ko_to_zhTW" ? "zhTW_to_ko" : "ko_to_zhTW";
+    setTranslateDirection(nextDirection);
+    setTranslateError(null);
+    if (translatedText.trim()) {
+      setTranslateInput(translatedText);
+      setTranslatedText("");
+    }
+  }
+
+  function clearTranslateFields() {
+    setTranslateInput("");
+    setTranslatedText("");
+    setTranslateError(null);
+  }
+
+  function applyTranslateHistory(item: TranslationHistoryItem) {
+    if (!isSupportedTranslateLang(item.sourceLang) || !isSupportedTranslateLang(item.targetLang)) return;
+    const nextDirection: TranslateDirection =
+      item.sourceLang === "ko" && item.targetLang === "zh-TW" ? "ko_to_zhTW" : "zhTW_to_ko";
+    setTranslateDirection(nextDirection);
+    setTranslateInput(item.sourceText);
+    setTranslatedText(item.translatedText);
+    setTranslateError(null);
   }
 
   async function copyText(text: string, label: string) {
@@ -1410,7 +1565,7 @@ export default function Home() {
             )}
 
             {/* 날씨 */}
-            <section className={`${budgetSectionClass("itinerary")} ui-panel ui-appear rounded-2xl p-4 sm:p-5`}>
+            <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
               <div className="flex items-center justify-between">
                 <h2 className="font-bold text-slate-800">타이베이 현재 날씨</h2>
                 <button
@@ -1488,7 +1643,7 @@ export default function Home() {
             )}
 
             {/* 환율 */}
-            <section className={`${budgetSectionClass("expenses")} ui-panel ui-appear rounded-2xl p-4 sm:p-5`}>
+            <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
               <h2 className="font-bold text-slate-700">환율 · KRW ↔ TWD</h2>
               {loadingSummary ? (
                 <p className="mt-4 text-sm text-slate-400">불러오는 중...</p>
@@ -1591,20 +1746,50 @@ export default function Home() {
           <div className="grid grid-cols-1 gap-3 sm:gap-4">
             <section className="ui-hero ui-appear rounded-3xl p-4 text-white sm:p-6">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/75">
-                Korean → Traditional Chinese
+                {activeTranslateMeta.badge}
               </p>
               <h2 className="mt-2 text-xl font-black leading-tight sm:text-2xl">
-                한국어를 대만 번체 중국어로
-                <br className="sm:hidden" /> 바로 번역
+                {activeTranslateMeta.title}
               </h2>
               <p className="mt-1 text-xs text-white/85 sm:text-sm">
-                택시, 식당, 길찾기에서 바로 보여줄 문장을 빠르게 만들 수 있어요.
+                {activeTranslateMeta.helper}
               </p>
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  onClick={() => setTranslateDirection("ko_to_zhTW")}
+                  className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                    translateDirection === "ko_to_zhTW"
+                      ? "bg-white text-teal-800"
+                      : "border border-white/45 bg-white/15 text-white"
+                  }`}
+                >
+                  한국어 → 대만어
+                </button>
+                <button
+                  onClick={() => setTranslateDirection("zhTW_to_ko")}
+                  className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                    translateDirection === "zhTW_to_ko"
+                      ? "bg-white text-teal-800"
+                      : "border border-white/45 bg-white/15 text-white"
+                  }`}
+                >
+                  대만어 → 한국어
+                </button>
+                <button
+                  onClick={reverseTranslateDirection}
+                  className="rounded-full border border-white/45 bg-white/15 px-3 py-1.5 text-xs font-semibold text-white"
+                >
+                  ↔ 방향 전환
+                </button>
+              </div>
             </section>
 
-            <section className={`${budgetSectionClass("expenses")} ui-panel ui-appear rounded-2xl p-4 sm:p-5`}>
-              <div className="flex items-center justify-between">
-                <h3 className="font-bold text-slate-800">번역할 한국어 문장</h3>
+            <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="font-bold text-slate-800">
+                  번역할 {activeTranslateMeta.sourceLabel} 문장
+                </h3>
                 <span className="text-xs font-semibold text-slate-400">
                   {translateInput.trim().length}/800
                 </span>
@@ -1613,13 +1798,13 @@ export default function Home() {
               <textarea
                 value={translateInput}
                 onChange={(e) => setTranslateInput(e.target.value)}
-                placeholder="예) 이 근처에서 야시장 가려면 어떻게 가나요?"
+                placeholder={activeTranslateMeta.placeholder}
                 className="mt-3 h-36 w-full resize-none rounded-2xl border border-white/70 bg-white/80 p-3 text-sm leading-relaxed text-slate-800 outline-none ring-teal-400/40 transition focus:ring"
                 maxLength={800}
               />
 
               <div className="mt-3 flex flex-wrap gap-2">
-                {QUICK_TRANSLATE_SAMPLES.map((sample) => (
+                {quickTranslateSamples.map((sample) => (
                   <button
                     key={sample}
                     onClick={() => applySampleSentence(sample)}
@@ -1630,13 +1815,25 @@ export default function Home() {
                 ))}
               </div>
 
-              <div className="mt-4 flex justify-end">
+              <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
                 <button
-                  onClick={() => void translateKoreanToTraditionalChinese()}
+                  onClick={() => void translateText()}
                   disabled={loadingTranslate}
                   className="rounded-xl bg-gradient-to-r from-teal-700 to-cyan-700 px-4 py-2 text-sm font-semibold text-white transition hover:from-teal-600 hover:to-cyan-600 disabled:opacity-60"
                 >
                   {loadingTranslate ? "번역 중..." : "번역하기"}
+                </button>
+                <button
+                  onClick={reverseTranslateDirection}
+                  className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
+                >
+                  입력/방향 전환
+                </button>
+                <button
+                  onClick={clearTranslateFields}
+                  className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-500"
+                >
+                  입력 초기화
                 </button>
               </div>
             </section>
@@ -1648,9 +1845,19 @@ export default function Home() {
             )}
 
             <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
-              <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-400">
-                번역 결과 (繁體中文)
-              </p>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-400">
+                  번역 결과 ({activeTranslateMeta.targetLabel})
+                </p>
+                {translatedText && (
+                  <button
+                    onClick={() => void copyText(translatedText, "번역 결과")}
+                    className="text-xs font-semibold text-teal-700 underline"
+                  >
+                    결과 복사
+                  </button>
+                )}
+              </div>
               {loadingTranslate ? (
                 <p className="mt-3 text-sm text-slate-400">번역 결과를 가져오는 중...</p>
               ) : translatedText ? (
@@ -1659,17 +1866,59 @@ export default function Home() {
                     {translatedText}
                   </p>
                   <button
-                    onClick={() => void copyText(translatedText, "번역 결과")}
-                    className="mt-2 text-sm font-semibold text-teal-700 underline"
+                    onClick={reverseTranslateDirection}
+                    className="mt-2 text-sm font-semibold text-slate-600 underline"
                   >
-                    번역 결과 복사
+                    이 결과를 입력창으로 가져오기
                   </button>
                 </>
               ) : (
                 <p className="mt-3 text-sm text-slate-400">
-                  한국어 문장을 입력한 뒤 <strong>번역하기</strong>를 눌러주세요.
+                  {activeTranslateMeta.sourceLabel} 문장을 입력한 뒤 <strong>번역하기</strong>를 눌러주세요.
                 </p>
               )}
+            </section>
+
+            <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="font-bold text-slate-800">최근 번역</h3>
+                <button
+                  onClick={() => setTranslateHistory([])}
+                  className="text-xs font-semibold text-slate-400 underline"
+                >
+                  기록 비우기
+                </button>
+              </div>
+              <div className="mt-3 grid gap-2">
+                {translateHistory.length === 0 ? (
+                  <p className="text-sm text-slate-400">
+                    최근 번역 기록이 없습니다.
+                  </p>
+                ) : (
+                  translateHistory.map((item) => (
+                    <button
+                      key={item.id}
+                      onClick={() => applyTranslateHistory(item)}
+                      className="rounded-xl border border-white/70 bg-white/75 px-3 py-2 text-left"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-[11px] font-semibold text-slate-500">
+                          {item.sourceLang === "ko" ? "한국어" : "대만어"} →{" "}
+                          {item.targetLang === "ko" ? "한국어" : "대만어"}
+                        </p>
+                        <p className="text-[11px] text-slate-400">
+                          {new Date(item.createdAt).toLocaleTimeString("ko-KR", {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </p>
+                      </div>
+                      <p className="mt-1 truncate text-sm font-semibold text-slate-700">{item.sourceText}</p>
+                      <p className="truncate text-sm text-teal-700">{item.translatedText}</p>
+                    </button>
+                  ))
+                )}
+              </div>
             </section>
           </div>
         )}

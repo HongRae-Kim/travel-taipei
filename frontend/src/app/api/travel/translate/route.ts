@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 
 type TranslateRequest = {
   text?: string;
+  source?: string;
+  target?: string;
 };
 
 type GoogleTranslateResponse = [
@@ -11,6 +13,10 @@ type GoogleTranslateResponse = [
 
 const GOOGLE_TRANSLATE_URL = "https://translate.googleapis.com/translate_a/single";
 const MAX_TEXT_LENGTH = 800;
+const DEFAULT_SOURCE_LANG = "ko";
+const DEFAULT_TARGET_LANG = "zh-TW";
+
+type TranslateLang = "ko" | "zh-TW";
 
 function parseTranslatedText(payload: unknown) {
   if (!Array.isArray(payload) || !Array.isArray(payload[0])) {
@@ -22,6 +28,14 @@ function parseTranslatedText(payload: unknown) {
     .join("")
     .trim();
   return translated || null;
+}
+
+function normalizeTranslateLang(raw: string | undefined): TranslateLang | null {
+  if (!raw) return null;
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "ko") return "ko";
+  if (normalized === "zh-tw") return "zh-TW";
+  return null;
 }
 
 export async function POST(request: Request) {
@@ -38,7 +52,7 @@ export async function POST(request: Request) {
   const sourceText = body.text?.trim() ?? "";
   if (!sourceText) {
     return NextResponse.json(
-      { success: false, message: "번역할 한국어 문장을 입력해주세요." },
+      { success: false, message: "번역할 문장을 입력해주세요." },
       { status: 400 }
     );
   }
@@ -49,10 +63,22 @@ export async function POST(request: Request) {
     );
   }
 
+  const sourceLang = normalizeTranslateLang(body.source) ?? DEFAULT_SOURCE_LANG;
+  const targetLang = normalizeTranslateLang(body.target) ?? DEFAULT_TARGET_LANG;
+  const isSupportedPair =
+    (sourceLang === "ko" && targetLang === "zh-TW") ||
+    (sourceLang === "zh-TW" && targetLang === "ko");
+  if (!isSupportedPair) {
+    return NextResponse.json(
+      { success: false, message: "지원하지 않는 번역 방향입니다. (ko ↔ zh-TW)" },
+      { status: 400 }
+    );
+  }
+
   const params = new URLSearchParams({
     client: "gtx",
-    sl: "ko",
-    tl: "zh-TW",
+    sl: sourceLang,
+    tl: targetLang,
     dt: "t",
     q: sourceText,
   });
@@ -84,8 +110,8 @@ export async function POST(request: Request) {
       data: {
         sourceText,
         translatedText,
-        sourceLang: "ko",
-        targetLang: "zh-TW",
+        sourceLang,
+        targetLang,
       },
     });
   } catch {
