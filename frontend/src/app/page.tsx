@@ -94,6 +94,17 @@ type FamilyExpenseRecord = {
   createdAt: string;
 };
 
+type ItineraryPlanItem = {
+  id: string;
+  day: number;
+  time: string;
+  place: string;
+  activity: string;
+  category: ExpenseCategory;
+  estimatedCostTwd: number;
+  isExample?: boolean;
+};
+
 type SpotFilters = {
   type: "restaurant" | "cafe" | "attraction";
   radius: string;
@@ -137,6 +148,7 @@ const TAB_ITEMS: Array<{ tab: Tab; icon: string; label: string }> = [
 const STORAGE_KEYS = {
   familyPlan: "travelTaipei:familyPlan",
   familyExpenses: "travelTaipei:familyExpenses",
+  itineraryPlan: "travelTaipei:itineraryPlan",
   phrasesPrefix: "travelTaipei:phrases:",
   spotsPrefix: "travelTaipei:spots:",
   spotDetailPrefix: "travelTaipei:spotDetail:",
@@ -167,6 +179,90 @@ const EXPENSE_CATEGORY_META: Array<{ value: ExpenseCategory; label: string; icon
   { value: "activity", label: "관광/체험", icon: "🎟", ratio: 0.12 },
   { value: "shopping", label: "쇼핑", icon: "🛍", ratio: 0.08 },
   { value: "other", label: "기타", icon: "🧾", ratio: 0.05 },
+];
+
+const EXAMPLE_ITINERARY_TEMPLATE: Array<Omit<ItineraryPlanItem, "id">> = [
+  {
+    day: 1,
+    time: "09:00",
+    place: "타이베이 101",
+    activity: "전망대 관람 및 주변 산책",
+    category: "activity",
+    estimatedCostTwd: 600,
+    isExample: true,
+  },
+  {
+    day: 1,
+    time: "12:30",
+    place: "융캉제",
+    activity: "점심 식사",
+    category: "food",
+    estimatedCostTwd: 750,
+    isExample: true,
+  },
+  {
+    day: 1,
+    time: "15:30",
+    place: "중정기념당",
+    activity: "관람 + 카페 휴식",
+    category: "activity",
+    estimatedCostTwd: 350,
+    isExample: true,
+  },
+  {
+    day: 2,
+    time: "08:30",
+    place: "단수이",
+    activity: "강변 산책 및 페리 이동",
+    category: "transport",
+    estimatedCostTwd: 420,
+    isExample: true,
+  },
+  {
+    day: 2,
+    time: "13:00",
+    place: "시먼딩",
+    activity: "점심 + 쇼핑",
+    category: "shopping",
+    estimatedCostTwd: 1200,
+    isExample: true,
+  },
+  {
+    day: 2,
+    time: "19:00",
+    place: "스린 야시장",
+    activity: "저녁 식사 및 야시장 투어",
+    category: "food",
+    estimatedCostTwd: 900,
+    isExample: true,
+  },
+  {
+    day: 3,
+    time: "10:00",
+    place: "국립고궁박물원",
+    activity: "박물관 관람",
+    category: "activity",
+    estimatedCostTwd: 550,
+    isExample: true,
+  },
+  {
+    day: 3,
+    time: "14:30",
+    place: "신이 상권",
+    activity: "기념품 쇼핑",
+    category: "shopping",
+    estimatedCostTwd: 800,
+    isExample: true,
+  },
+  {
+    day: 3,
+    time: "18:30",
+    place: "호텔 근처 레스토랑",
+    activity: "마지막 저녁",
+    category: "food",
+    estimatedCostTwd: 700,
+    isExample: true,
+  },
 ];
 
 function readStorage<T>(key: string) {
@@ -220,6 +316,20 @@ function formatDateLabel(date: Date) {
     day: "numeric",
     weekday: "short",
   });
+}
+
+function buildExampleItinerary(days: number) {
+  const maxDay = Math.max(1, days);
+  return EXAMPLE_ITINERARY_TEMPLATE
+    .filter((item) => item.day <= maxDay)
+    .map((item) => ({
+      ...item,
+      id: `example-${item.day}-${item.time}-${item.place}`,
+    }));
+}
+
+function isValidTimeInput(value: string) {
+  return /^([01]\d|2[0-3]):([0-5]\d)$/.test(value);
 }
 
 function getTodayOpeningInfo(openingHours: string[]) {
@@ -307,6 +417,14 @@ export default function Home() {
   const [tripStartDate, setTripStartDate] = useState(() => toIsoDate(new Date()));
   const [tripDays, setTripDays] = useState("3");
   const [customTotalBudgetInput, setCustomTotalBudgetInput] = useState("");
+  const [itineraryPlan, setItineraryPlan] = useState<ItineraryPlanItem[]>([]);
+  const [planDayInput, setPlanDayInput] = useState("1");
+  const [planTimeInput, setPlanTimeInput] = useState("09:00");
+  const [planPlaceInput, setPlanPlaceInput] = useState("");
+  const [planActivityInput, setPlanActivityInput] = useState("");
+  const [planCategoryInput, setPlanCategoryInput] = useState<ExpenseCategory>("activity");
+  const [planCostInput, setPlanCostInput] = useState("");
+  const [planError, setPlanError] = useState<string | null>(null);
   const [familyMembers, setFamilyMembers] = useState<FamilyMember[]>(DEFAULT_FAMILY_MEMBERS);
   const [familyExpenses, setFamilyExpenses] = useState<FamilyExpenseRecord[]>([]);
   const [newMemberName, setNewMemberName] = useState("");
@@ -405,6 +523,37 @@ export default function Home() {
       }
     }
 
+    const cachedItinerary = readStorage<ItineraryPlanItem[]>(STORAGE_KEYS.itineraryPlan);
+    if (cachedItinerary?.length) {
+      setItineraryPlan(
+        cachedItinerary
+          .map((item) => {
+            const day = Number(item.day);
+            const estimatedCostTwd = Number(item.estimatedCostTwd);
+            const nextCategory = isExpenseCategory(String(item.category))
+              ? item.category
+              : "other";
+            return {
+              id: item.id || `plan-${Date.now()}-${Math.round(Math.random() * 1000)}`,
+              day: Number.isFinite(day) && day > 0 ? Math.round(day) : 1,
+              time: isValidTimeInput(item.time) ? item.time : "09:00",
+              place: item.place?.trim() || "장소",
+              activity: item.activity?.trim() || "일정",
+              category: nextCategory,
+              estimatedCostTwd:
+                Number.isFinite(estimatedCostTwd) && estimatedCostTwd >= 0
+                  ? Math.round(estimatedCostTwd)
+                  : 0,
+              isExample: Boolean(item.isExample),
+            };
+          })
+          .sort((a, b) => a.day - b.day || a.time.localeCompare(b.time))
+      );
+    } else {
+      const daysFromPlan = Number.parseInt(cachedFamilyPlan?.tripDays ?? "3", 10) || 3;
+      setItineraryPlan(buildExampleItinerary(daysFromPlan));
+    }
+
     const updateNetworkState = () => setIsOnline(window.navigator.onLine);
     updateNetworkState();
     window.addEventListener("online", updateNetworkState);
@@ -429,12 +578,26 @@ export default function Home() {
   }, [familyExpenses]);
 
   useEffect(() => {
+    writeStorage(STORAGE_KEYS.itineraryPlan, itineraryPlan);
+  }, [itineraryPlan]);
+
+  useEffect(() => {
     if (familyMembers.length === 0) return;
     if (selectedExpenseMemberId === SHARED_MEMBER_ID) return;
     if (!familyMembers.some((member) => member.id === selectedExpenseMemberId)) {
       setSelectedExpenseMemberId(familyMembers[0].id);
     }
   }, [familyMembers, selectedExpenseMemberId]);
+
+  useEffect(() => {
+    const days = Math.max(1, Number.parseInt(tripDays, 10) || 1);
+    const selectedDay = Number.parseInt(planDayInput, 10) || 1;
+    if (selectedDay > days) {
+      setPlanDayInput(String(days));
+    } else if (selectedDay < 1) {
+      setPlanDayInput("1");
+    }
+  }, [tripDays, planDayInput]);
 
   useEffect(() => {
     if (!copiedMessage) return;
@@ -658,6 +821,63 @@ export default function Home() {
   function clearFamilyExpenses() {
     setFamilyExpenses([]);
     setBudgetError(null);
+  }
+
+  function addItineraryPlanItem() {
+    const days = Math.max(1, Number.parseInt(tripDays, 10) || 1);
+    const day = Number.parseInt(planDayInput, 10);
+    const estimatedCostTwd = Number(planCostInput);
+    if (!Number.isFinite(day) || day < 1 || day > days) {
+      setPlanError(`일차는 1~${days} 범위로 입력해주세요.`);
+      return;
+    }
+    if (!isValidTimeInput(planTimeInput)) {
+      setPlanError("시간은 HH:MM 형식으로 입력해주세요. (예: 14:30)");
+      return;
+    }
+    if (!planPlaceInput.trim()) {
+      setPlanError("장소를 입력해주세요.");
+      return;
+    }
+    if (!planActivityInput.trim()) {
+      setPlanError("일정 내용을 입력해주세요.");
+      return;
+    }
+    if (!Number.isFinite(estimatedCostTwd) || estimatedCostTwd < 0) {
+      setPlanError("예상 비용(TWD)을 올바르게 입력해주세요.");
+      return;
+    }
+
+    setItineraryPlan((prev) =>
+      [
+        ...prev,
+        {
+          id: `plan-${Date.now()}-${Math.round(Math.random() * 1000)}`,
+          day,
+          time: planTimeInput,
+          place: planPlaceInput.trim(),
+          activity: planActivityInput.trim(),
+          category: planCategoryInput,
+          estimatedCostTwd: Math.round(estimatedCostTwd),
+          isExample: false,
+        },
+      ].sort((a, b) => a.day - b.day || a.time.localeCompare(b.time))
+    );
+    setPlanPlaceInput("");
+    setPlanActivityInput("");
+    setPlanCostInput("");
+    setPlanCategoryInput("activity");
+    setPlanError(null);
+  }
+
+  function removeItineraryPlanItem(itemId: string) {
+    setItineraryPlan((prev) => prev.filter((item) => item.id !== itemId));
+  }
+
+  function resetExampleItinerary() {
+    const days = Math.max(1, Number.parseInt(tripDays, 10) || 1);
+    setItineraryPlan(buildExampleItinerary(days));
+    setPlanError(null);
   }
 
   async function detectLocation() {
@@ -948,6 +1168,44 @@ export default function Home() {
       };
     });
   }, [tripStartDate, familyExpenses, familyBudgetSummary.days, familyBudgetSummary.startDate, familyBudgetSummary.totalDailyPlanBudget]);
+
+  const itinerarySummary = useMemo(() => {
+    const maxDay = familyBudgetSummary.days;
+    const visibleItems = itineraryPlan.filter((item) => item.day >= 1 && item.day <= maxDay);
+    const totalEstimatedCostTwd = visibleItems.reduce((sum, item) => sum + item.estimatedCostTwd, 0);
+    const exampleCount = visibleItems.filter((item) => item.isExample).length;
+    const hiddenCount = itineraryPlan.length - visibleItems.length;
+    return {
+      totalEstimatedCostTwd,
+      itemCount: visibleItems.length,
+      exampleCount,
+      hiddenCount,
+      avgDailyCostTwd: maxDay > 0 ? totalEstimatedCostTwd / maxDay : 0,
+    };
+  }, [itineraryPlan, familyBudgetSummary.days]);
+
+  const itineraryByDay = useMemo(() => {
+    const budgetByDay = new Map<number, number>();
+    for (const dayPlan of tripDayPlan) {
+      budgetByDay.set(dayPlan.day, dayPlan.plannedTwd);
+    }
+    const maxDay = familyBudgetSummary.days;
+    return Array.from({ length: maxDay }, (_, index) => {
+      const day = index + 1;
+      const items = itineraryPlan
+        .filter((item) => item.day === day)
+        .sort((a, b) => a.time.localeCompare(b.time));
+      const estimatedCostTwd = items.reduce((sum, item) => sum + item.estimatedCostTwd, 0);
+      const dayBudgetTwd = budgetByDay.get(day) ?? 0;
+      return {
+        day,
+        items,
+        estimatedCostTwd,
+        dayBudgetTwd,
+        remainTwd: dayBudgetTwd - estimatedCostTwd,
+      };
+    });
+  }, [itineraryPlan, tripDayPlan, familyBudgetSummary.days]);
 
   const todayOpeningInfo = useMemo(
     () => (spotDetail ? getTodayOpeningInfo(spotDetail.openingHours) : null),
@@ -1517,6 +1775,170 @@ export default function Home() {
                 자동 계산값: {Math.round(familyBudgetSummary.autoTotalTripBudget).toLocaleString()} TWD
                 (구성원 일일 예산 합계 × 여행 일수)
               </p>
+            </section>
+
+            <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="font-bold text-slate-800">여행 일정표 예시 · 시간/장소/비용</h3>
+                <button
+                  onClick={resetExampleItinerary}
+                  className="text-xs font-semibold text-slate-500 underline"
+                >
+                  예시 일정 다시 불러오기
+                </button>
+              </div>
+              <p className="mt-1 text-xs text-slate-500">
+                하루에 언제 어디를 가는지와 예상 비용을 함께 관리할 수 있습니다.
+              </p>
+
+              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <div className="rounded-xl bg-slate-100 px-3 py-2 text-center">
+                  <p className="text-xs text-slate-500">일정 항목</p>
+                  <p className="text-base font-black text-slate-800">{itinerarySummary.itemCount}개</p>
+                </div>
+                <div className="rounded-xl bg-cyan-50 px-3 py-2 text-center">
+                  <p className="text-xs text-cyan-700">예상 총비용</p>
+                  <p className="text-base font-black text-cyan-800">
+                    {Math.round(itinerarySummary.totalEstimatedCostTwd).toLocaleString()} TWD
+                  </p>
+                </div>
+                <div className="rounded-xl bg-blue-50 px-3 py-2 text-center">
+                  <p className="text-xs text-blue-700">일평균 예상</p>
+                  <p className="text-base font-black text-blue-800">
+                    {Math.round(itinerarySummary.avgDailyCostTwd).toLocaleString()} TWD
+                  </p>
+                </div>
+                <div className="rounded-xl bg-teal-50 px-3 py-2 text-center">
+                  <p className="text-xs text-teal-700">예시 포함</p>
+                  <p className="text-base font-black text-teal-800">{itinerarySummary.exampleCount}개</p>
+                </div>
+              </div>
+
+              <div className="mt-3 grid gap-2 sm:grid-cols-[90px_110px_130px_1fr_1fr_130px_auto]">
+                <select
+                  value={planDayInput}
+                  onChange={(e) => setPlanDayInput(e.target.value)}
+                  className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
+                >
+                  {Array.from({ length: familyBudgetSummary.days }, (_, index) => {
+                    const day = index + 1;
+                    return (
+                      <option key={day} value={day}>
+                        Day {day}
+                      </option>
+                    );
+                  })}
+                </select>
+                <input
+                  type="time"
+                  value={planTimeInput}
+                  onChange={(e) => setPlanTimeInput(e.target.value)}
+                  className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
+                />
+                <select
+                  value={planCategoryInput}
+                  onChange={(e) => setPlanCategoryInput(e.target.value as ExpenseCategory)}
+                  className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
+                >
+                  {EXPENSE_CATEGORY_META.map((category) => (
+                    <option key={category.value} value={category.value}>
+                      {category.icon} {category.label}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="text"
+                  value={planPlaceInput}
+                  onChange={(e) => setPlanPlaceInput(e.target.value)}
+                  className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
+                  placeholder="장소 (예: 스린 야시장)"
+                />
+                <input
+                  type="text"
+                  value={planActivityInput}
+                  onChange={(e) => setPlanActivityInput(e.target.value)}
+                  className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
+                  placeholder="일정 내용 (예: 저녁 + 산책)"
+                />
+                <input
+                  type="number"
+                  min={0}
+                  value={planCostInput}
+                  onChange={(e) => setPlanCostInput(e.target.value)}
+                  className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
+                  placeholder="예상비용(TWD)"
+                />
+                <button
+                  onClick={addItineraryPlanItem}
+                  className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                >
+                  일정 추가
+                </button>
+              </div>
+
+              {planError && (
+                <p className="mt-2 text-sm font-semibold text-rose-600">{planError}</p>
+              )}
+              {itinerarySummary.hiddenCount > 0 && (
+                <p className="mt-2 text-xs text-slate-500">
+                  현재 여행 일수 밖 일정 {itinerarySummary.hiddenCount}개는 숨김 처리되어 있습니다.
+                </p>
+              )}
+
+              <div className="mt-3 space-y-2">
+                {itineraryByDay.map((dayPlan) => (
+                  <div
+                    key={`itinerary-day-${dayPlan.day}`}
+                    className="rounded-xl border border-white/70 bg-white/75 px-3 py-3"
+                  >
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm font-bold text-slate-800">Day {dayPlan.day}</p>
+                      <p
+                        className={`text-xs font-semibold ${
+                          dayPlan.remainTwd >= 0 ? "text-emerald-600" : "text-rose-600"
+                        }`}
+                      >
+                        일정 예상 {Math.round(dayPlan.estimatedCostTwd).toLocaleString()} / 일일 예산{" "}
+                        {Math.round(dayPlan.dayBudgetTwd).toLocaleString()} TWD
+                      </p>
+                    </div>
+                    {dayPlan.items.length === 0 ? (
+                      <p className="mt-2 text-xs text-slate-500">
+                        등록된 일정이 없습니다. 위 입력창에서 추가해보세요.
+                      </p>
+                    ) : (
+                      <div className="mt-2 space-y-1.5">
+                        {dayPlan.items.map((item) => {
+                          const category =
+                            EXPENSE_CATEGORY_META.find((meta) => meta.value === item.category) ??
+                            EXPENSE_CATEGORY_META[EXPENSE_CATEGORY_META.length - 1];
+                          return (
+                            <div
+                              key={item.id}
+                              className="grid items-center gap-2 rounded-lg border border-slate-100 bg-white px-2 py-2 sm:grid-cols-[72px_1fr_auto_auto]"
+                            >
+                              <p className="text-sm font-bold text-slate-700">{item.time}</p>
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-semibold text-slate-800">{item.place}</p>
+                                <p className="truncate text-xs text-slate-500">{item.activity}</p>
+                              </div>
+                              <p className="text-xs font-semibold text-slate-500">
+                                {category.icon} {category.label} · {Math.round(item.estimatedCostTwd).toLocaleString()} TWD
+                              </p>
+                              <button
+                                onClick={() => removeItineraryPlanItem(item.id)}
+                                className="text-[11px] font-semibold text-slate-400 underline"
+                              >
+                                삭제
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
             </section>
 
             <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
