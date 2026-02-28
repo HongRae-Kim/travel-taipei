@@ -76,27 +76,19 @@ type TranslationResult = {
   targetLang: string;
 };
 
-type SavedSpot = {
-  id: string;
-  name: string;
-  type: string;
-  rating: number | null;
-  address: string;
-  lat: number;
-  lng: number;
-  photoUrl: string | null;
-};
-
 type FamilyMember = {
   id: string;
   name: string;
   dailyBudgetTwd: number;
 };
 
+type ExpenseCategory = "food" | "transport" | "stay" | "activity" | "shopping" | "other";
+
 type FamilyExpenseRecord = {
   id: string;
   memberId: string;
   note: string;
+  category: ExpenseCategory;
   amountKrw: number;
   amountTwd: number;
   createdAt: string;
@@ -132,17 +124,17 @@ const QUICK_TRANSLATE_SAMPLES = [
   "카드 결제 가능한가요?",
 ];
 
-type Tab = "home" | "phrase" | "translate" | "spot";
+type Tab = "home" | "phrase" | "translate" | "spot" | "budget";
 
 const TAB_ITEMS: Array<{ tab: Tab; icon: string; label: string }> = [
   { tab: "home", icon: "🏠", label: "홈" },
   { tab: "phrase", icon: "💬", label: "회화" },
   { tab: "translate", icon: "🈶", label: "번역" },
   { tab: "spot", icon: "📍", label: "장소" },
+  { tab: "budget", icon: "💰", label: "예산" },
 ];
 
 const STORAGE_KEYS = {
-  savedSpots: "travelTaipei:savedSpots",
   familyPlan: "travelTaipei:familyPlan",
   familyExpenses: "travelTaipei:familyExpenses",
   phrasesPrefix: "travelTaipei:phrases:",
@@ -164,6 +156,17 @@ const WEEKDAY_KO = [
 const DEFAULT_FAMILY_MEMBERS: FamilyMember[] = [
   { id: "member-self", name: "나", dailyBudgetTwd: 1500 },
   { id: "member-family", name: "가족", dailyBudgetTwd: 1500 },
+];
+
+const SHARED_MEMBER_ID = "__shared__";
+
+const EXPENSE_CATEGORY_META: Array<{ value: ExpenseCategory; label: string; icon: string; ratio: number }> = [
+  { value: "food", label: "식비", icon: "🍜", ratio: 0.35 },
+  { value: "transport", label: "교통", icon: "🚌", ratio: 0.18 },
+  { value: "stay", label: "숙박", icon: "🏨", ratio: 0.22 },
+  { value: "activity", label: "관광/체험", icon: "🎟", ratio: 0.12 },
+  { value: "shopping", label: "쇼핑", icon: "🛍", ratio: 0.08 },
+  { value: "other", label: "기타", icon: "🧾", ratio: 0.05 },
 ];
 
 function readStorage<T>(key: string) {
@@ -192,52 +195,31 @@ function makeSpotsCacheKey(nextFilters: SpotFilters, loc: { lat: number; lng: nu
   return `${STORAGE_KEYS.spotsPrefix}${nextFilters.type}:${nextFilters.radius}:${nextFilters.openNow}:${nextFilters.minRating || "all"}:${lat}:${lng}`;
 }
 
-function haversineKm(fromLat: number, fromLng: number, toLat: number, toLng: number) {
-  const toRad = (deg: number) => (deg * Math.PI) / 180;
-  const dLat = toRad(toLat - fromLat);
-  const dLng = toRad(toLng - fromLng);
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRad(fromLat)) *
-      Math.cos(toRad(toLat)) *
-      Math.sin(dLng / 2) *
-      Math.sin(dLng / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return 6371 * c;
+function isExpenseCategory(value: string): value is ExpenseCategory {
+  return EXPENSE_CATEGORY_META.some((item) => item.value === value);
 }
 
-function optimizeRoute(
-  spots: SavedSpot[],
-  start: { lat: number; lng: number } | null
-) {
-  if (spots.length === 0) {
-    return { ordered: [] as SavedSpot[], legDistances: [] as number[], totalDistanceKm: 0 };
-  }
+function parseIsoDate(value: string) {
+  const [year, month, day] = value.split("-").map((part) => Number(part));
+  if (!year || !month || !day) return null;
+  const parsed = new Date(year, month - 1, day);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed;
+}
 
-  const remaining = [...spots];
-  const ordered: SavedSpot[] = [];
-  const legDistances: number[] = [];
-  let currentPoint = start ?? { lat: remaining[0].lat, lng: remaining[0].lng };
+function toIsoDate(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
 
-  while (remaining.length > 0) {
-    let bestIndex = 0;
-    let bestDistance = Number.POSITIVE_INFINITY;
-    for (let i = 0; i < remaining.length; i += 1) {
-      const spot = remaining[i];
-      const distance = haversineKm(currentPoint.lat, currentPoint.lng, spot.lat, spot.lng);
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        bestIndex = i;
-      }
-    }
-    const [next] = remaining.splice(bestIndex, 1);
-    ordered.push(next);
-    legDistances.push(bestDistance);
-    currentPoint = { lat: next.lat, lng: next.lng };
-  }
-
-  const totalDistanceKm = legDistances.reduce((sum, dist) => sum + dist, 0);
-  return { ordered, legDistances, totalDistanceKm };
+function formatDateLabel(date: Date) {
+  return date.toLocaleDateString("ko-KR", {
+    month: "numeric",
+    day: "numeric",
+    weekday: "short",
+  });
 }
 
 function getTodayOpeningInfo(openingHours: string[]) {
@@ -322,13 +304,14 @@ export default function Home() {
   const sheetCanDrag = useRef(false);
   const lightboxOpenedAt = useRef(0);
   const lightboxImages = spotDetail?.photoUrls ?? [];
-  const [savedSpots, setSavedSpots] = useState<SavedSpot[]>([]);
+  const [tripStartDate, setTripStartDate] = useState(() => toIsoDate(new Date()));
   const [tripDays, setTripDays] = useState("3");
   const [familyMembers, setFamilyMembers] = useState<FamilyMember[]>(DEFAULT_FAMILY_MEMBERS);
   const [familyExpenses, setFamilyExpenses] = useState<FamilyExpenseRecord[]>([]);
   const [newMemberName, setNewMemberName] = useState("");
   const [newMemberDailyBudgetInput, setNewMemberDailyBudgetInput] = useState("1500");
   const [selectedExpenseMemberId, setSelectedExpenseMemberId] = useState(DEFAULT_FAMILY_MEMBERS[0].id);
+  const [expenseCategoryInput, setExpenseCategoryInput] = useState<ExpenseCategory>("food");
   const [expenseKrwInput, setExpenseKrwInput] = useState("");
   const [expenseNoteInput, setExpenseNoteInput] = useState("");
   const [budgetError, setBudgetError] = useState<string | null>(null);
@@ -343,12 +326,11 @@ export default function Home() {
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    const cachedSavedSpots = readStorage<SavedSpot[]>(STORAGE_KEYS.savedSpots);
-    if (cachedSavedSpots) {
-      setSavedSpots(cachedSavedSpots);
-    }
-
-    const cachedFamilyPlan = readStorage<{ tripDays: string; familyMembers: FamilyMember[] }>(
+    const cachedFamilyPlan = readStorage<{
+      tripStartDate?: string;
+      tripDays: string;
+      familyMembers: FamilyMember[];
+    }>(
       STORAGE_KEYS.familyPlan
     );
     if (cachedFamilyPlan?.familyMembers?.length) {
@@ -362,6 +344,9 @@ export default function Home() {
       if (normalizedMembers.length > 0) {
         setFamilyMembers(normalizedMembers);
         setSelectedExpenseMemberId(normalizedMembers[0].id);
+      }
+      if (cachedFamilyPlan.tripStartDate && parseIsoDate(cachedFamilyPlan.tripStartDate)) {
+        setTripStartDate(cachedFamilyPlan.tripStartDate);
       }
       if (cachedFamilyPlan.tripDays) {
         setTripDays(cachedFamilyPlan.tripDays);
@@ -380,7 +365,26 @@ export default function Home() {
 
     const cachedFamilyExpenses = readStorage<FamilyExpenseRecord[]>(STORAGE_KEYS.familyExpenses);
     if (cachedFamilyExpenses) {
-      setFamilyExpenses(cachedFamilyExpenses);
+      setFamilyExpenses(
+        cachedFamilyExpenses
+          .map((expense) => {
+            const nextCategory = isExpenseCategory(String(expense.category))
+              ? expense.category
+              : "other";
+            const amountKrw = Number(expense.amountKrw);
+            const amountTwd = Number(expense.amountTwd);
+            return {
+              id: expense.id || `expense-${Date.now()}-${Math.round(Math.random() * 1000)}`,
+              memberId: expense.memberId || DEFAULT_FAMILY_MEMBERS[0].id,
+              note: expense.note?.trim() || "기타 지출",
+              category: nextCategory,
+              amountKrw: Number.isFinite(amountKrw) && amountKrw > 0 ? amountKrw : 0,
+              amountTwd: Number.isFinite(amountTwd) && amountTwd > 0 ? amountTwd : 0,
+              createdAt: expense.createdAt || new Date().toISOString(),
+            };
+          })
+          .filter((expense) => expense.amountKrw > 0 && expense.amountTwd > 0)
+      );
     } else {
       const legacyExpenses = readStorage<Array<Omit<FamilyExpenseRecord, "memberId">>>(
         "travelTaipei:expenses"
@@ -390,6 +394,7 @@ export default function Home() {
           legacyExpenses.map((expense) => ({
             ...expense,
             memberId: DEFAULT_FAMILY_MEMBERS[0].id,
+            category: "other",
           }))
         );
       }
@@ -406,12 +411,8 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    writeStorage(STORAGE_KEYS.savedSpots, savedSpots);
-  }, [savedSpots]);
-
-  useEffect(() => {
-    writeStorage(STORAGE_KEYS.familyPlan, { tripDays, familyMembers });
-  }, [tripDays, familyMembers]);
+    writeStorage(STORAGE_KEYS.familyPlan, { tripStartDate, tripDays, familyMembers });
+  }, [tripStartDate, tripDays, familyMembers]);
 
   useEffect(() => {
     writeStorage(STORAGE_KEYS.familyExpenses, familyExpenses);
@@ -419,6 +420,7 @@ export default function Home() {
 
   useEffect(() => {
     if (familyMembers.length === 0) return;
+    if (selectedExpenseMemberId === SHARED_MEMBER_ID) return;
     if (!familyMembers.some((member) => member.id === selectedExpenseMemberId)) {
       setSelectedExpenseMemberId(familyMembers[0].id);
     }
@@ -540,45 +542,6 @@ export default function Home() {
     void translateKoreanToTraditionalChinese(sentence);
   }
 
-  function normalizeSavedSpotFromList(spot: SpotResponse): SavedSpot {
-    return {
-      id: spot.id,
-      name: spot.name,
-      type: spot.type,
-      rating: spot.rating,
-      address: spot.address,
-      lat: spot.lat,
-      lng: spot.lng,
-      photoUrl: spot.photoUrl,
-    };
-  }
-
-  function normalizeSavedSpotFromDetail(detail: SpotDetailResponse): SavedSpot {
-    const listMatched = spots.find((spot) => spot.id === detail.id);
-    return {
-      id: detail.id,
-      name: detail.name,
-      type: detail.type,
-      rating: detail.rating,
-      address: detail.address,
-      lat: detail.lat,
-      lng: detail.lng,
-      photoUrl: detail.photoUrls[0] ?? listMatched?.photoUrl ?? null,
-    };
-  }
-
-  function isSavedSpot(spotId: string) {
-    return savedSpots.some((spot) => spot.id === spotId);
-  }
-
-  function toggleSavedSpot(spot: SavedSpot) {
-    setSavedSpots((prev) =>
-      prev.some((item) => item.id === spot.id)
-        ? prev.filter((item) => item.id !== spot.id)
-        : [...prev, spot]
-    );
-  }
-
   async function copyText(text: string, label: string) {
     try {
       await navigator.clipboard.writeText(text);
@@ -586,28 +549,6 @@ export default function Home() {
     } catch {
       setCopiedMessage("복사에 실패했습니다.");
     }
-  }
-
-  async function shareSavedCourse() {
-    if (savedSpots.length === 0) return;
-    const route = optimizeRoute(savedSpots, userLocation);
-    const text = route.ordered
-      .map((spot, idx) => `${idx + 1}. ${spot.name} - ${spot.address}`)
-      .join("\n");
-    const payload = `타이베이 추천 코스\n${text}`;
-
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: "타이베이 추천 코스",
-          text: payload,
-        });
-        return;
-      } catch {
-        // ignore and fallback to clipboard.
-      }
-    }
-    await copyText(payload, "코스");
   }
 
   function addFamilyMember() {
@@ -667,7 +608,10 @@ export default function Home() {
   }
 
   function addFamilyExpense() {
-    if (!selectedExpenseMemberId || !familyMembers.some((member) => member.id === selectedExpenseMemberId)) {
+    if (
+      selectedExpenseMemberId !== SHARED_MEMBER_ID &&
+      !familyMembers.some((member) => member.id === selectedExpenseMemberId)
+    ) {
       setBudgetError("지출을 기록할 가족 구성원을 먼저 선택해주세요.");
       return;
     }
@@ -684,6 +628,7 @@ export default function Home() {
         id: `expense-${Date.now()}-${Math.round(Math.random() * 1000)}`,
         memberId: selectedExpenseMemberId,
         note: expenseNoteInput.trim() || "기타 지출",
+        category: expenseCategoryInput,
         amountKrw,
         amountTwd,
         createdAt: new Date().toISOString(),
@@ -692,6 +637,7 @@ export default function Home() {
     ]);
     setExpenseKrwInput("");
     setExpenseNoteInput("");
+    setExpenseCategoryInput("food");
     setBudgetError(null);
   }
 
@@ -863,23 +809,6 @@ export default function Home() {
     return `${spots.length}개 장소`;
   }, [loadingSpots, spots.length]);
 
-  const optimizedRoute = useMemo(
-    () => optimizeRoute(savedSpots, userLocation),
-    [savedSpots, userLocation]
-  );
-
-  const routeTimeSummary = useMemo(() => {
-    const walkMin = optimizedRoute.legDistances.reduce(
-      (sum, distance) => sum + travelTime(distance).walkMin,
-      0
-    );
-    const transitMin = optimizedRoute.legDistances.reduce(
-      (sum, distance) => sum + travelTime(distance).transitMin,
-      0
-    );
-    return { walkMin, transitMin };
-  }, [optimizedRoute.legDistances]);
-
   const familyBudgetSummary = useMemo(() => {
     const days = Math.max(1, Number.parseInt(tripDays, 10) || 1);
     const totalDailyBudget = familyMembers.reduce((sum, member) => sum + member.dailyBudgetTwd, 0);
@@ -887,32 +816,121 @@ export default function Home() {
     const spentTwd = familyExpenses.reduce((sum, expense) => sum + expense.amountTwd, 0);
     const spentKrw = familyExpenses.reduce((sum, expense) => sum + expense.amountKrw, 0);
     const remainTwd = Number((totalTripBudget - spentTwd).toFixed(2));
-    const estimatedSpotCost = savedSpots.reduce((sum, spot) => {
-      if (spot.type === "restaurant") return sum + 260;
-      if (spot.type === "cafe") return sum + 160;
-      return sum + 120;
-    }, 0) * days;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const parsedStartDate = parseIsoDate(tripStartDate) ?? new Date(today);
+    parsedStartDate.setHours(0, 0, 0, 0);
+    const offsetDays = Math.floor((today.getTime() - parsedStartDate.getTime()) / 86400000);
+    const rawTripDay = offsetDays + 1;
+    const currentTripDay = rawTripDay < 1 ? 0 : Math.min(rawTripDay, days);
+    const daysLeft = rawTripDay < 1 ? days : Math.max(0, days - rawTripDay + 1);
+    const usagePercent = totalTripBudget > 0 ? Math.max(0, (spentTwd / totalTripBudget) * 100) : 0;
+    const dailyAllowanceTwd = daysLeft > 0 ? remainTwd / daysLeft : 0;
     return {
       days,
+      startDate: parsedStartDate,
       totalDailyBudget,
       totalTripBudget,
       spentTwd: Number(spentTwd.toFixed(2)),
       spentKrw: Math.round(spentKrw),
       remainTwd,
-      estimatedSpotCost,
+      currentTripDay,
+      daysLeft,
+      usagePercent,
+      dailyAllowanceTwd,
     };
-  }, [tripDays, familyMembers, familyExpenses, savedSpots]);
+  }, [tripStartDate, tripDays, familyMembers, familyExpenses]);
 
   const memberExpenseSummary = useMemo(() => {
-    const map = new Map<string, { spentTwd: number; spentKrw: number }>();
+    const map = new Map<string, { spentTwd: number; spentKrw: number; expenseCount: number }>();
+    for (const member of familyMembers) {
+      map.set(member.id, { spentTwd: 0, spentKrw: 0, expenseCount: 0 });
+    }
+    const memberCount = Math.max(1, familyMembers.length);
     for (const expense of familyExpenses) {
-      const current = map.get(expense.memberId) ?? { spentTwd: 0, spentKrw: 0 };
+      if (expense.memberId === SHARED_MEMBER_ID) {
+        const splitTwd = expense.amountTwd / memberCount;
+        const splitKrw = expense.amountKrw / memberCount;
+        for (const member of familyMembers) {
+          const current = map.get(member.id);
+          if (!current) continue;
+          current.spentTwd += splitTwd;
+          current.spentKrw += splitKrw;
+          current.expenseCount += 1;
+        }
+        continue;
+      }
+      const current = map.get(expense.memberId);
+      if (!current) continue;
       current.spentTwd += expense.amountTwd;
       current.spentKrw += expense.amountKrw;
-      map.set(expense.memberId, current);
+      current.expenseCount += 1;
     }
     return map;
+  }, [familyExpenses, familyMembers]);
+
+  const expenseCategorySummary = useMemo(() => {
+    const categoryMap = new Map<
+      ExpenseCategory,
+      { spentTwd: number; spentKrw: number; count: number }
+    >();
+    for (const meta of EXPENSE_CATEGORY_META) {
+      categoryMap.set(meta.value, { spentTwd: 0, spentKrw: 0, count: 0 });
+    }
+    for (const expense of familyExpenses) {
+      const current = categoryMap.get(expense.category);
+      if (!current) continue;
+      current.spentTwd += expense.amountTwd;
+      current.spentKrw += expense.amountKrw;
+      current.count += 1;
+    }
+    const totalSpent = familyExpenses.reduce((sum, expense) => sum + expense.amountTwd, 0);
+    return EXPENSE_CATEGORY_META.map((meta) => {
+      const value = categoryMap.get(meta.value) ?? { spentTwd: 0, spentKrw: 0, count: 0 };
+      const spentRatio = totalSpent > 0 ? (value.spentTwd / totalSpent) * 100 : 0;
+      return { ...meta, ...value, spentRatio, planRatio: meta.ratio };
+    }).sort((a, b) => b.spentTwd - a.spentTwd);
   }, [familyExpenses]);
+
+  const memberSpendRanking = useMemo(
+    () =>
+      familyMembers
+        .map((member) => {
+          const spent = memberExpenseSummary.get(member.id) ?? { spentTwd: 0, spentKrw: 0, expenseCount: 0 };
+          const memberTripBudget = member.dailyBudgetTwd * familyBudgetSummary.days;
+          const remain = memberTripBudget - spent.spentTwd;
+          return { member, spent, memberTripBudget, remain };
+        })
+        .sort((a, b) => b.spent.spentTwd - a.spent.spentTwd),
+    [familyMembers, memberExpenseSummary, familyBudgetSummary.days]
+  );
+
+  const tripDayPlan = useMemo(() => {
+    const spentByDate = new Map<string, number>();
+    for (const expense of familyExpenses) {
+      const created = new Date(expense.createdAt);
+      if (Number.isNaN(created.getTime())) continue;
+      const dateKey = toIsoDate(created);
+      spentByDate.set(dateKey, (spentByDate.get(dateKey) ?? 0) + expense.amountTwd);
+    }
+    const days = familyBudgetSummary.days;
+    const startDate = parseIsoDate(tripStartDate) ?? familyBudgetSummary.startDate;
+    return Array.from({ length: days }, (_, index) => {
+      const date = new Date(startDate);
+      date.setDate(startDate.getDate() + index);
+      const key = toIsoDate(date);
+      const spentTwd = spentByDate.get(key) ?? 0;
+      const plannedTwd = familyBudgetSummary.totalDailyBudget;
+      return {
+        key,
+        day: index + 1,
+        label: formatDateLabel(date),
+        plannedTwd,
+        spentTwd,
+        remainTwd: plannedTwd - spentTwd,
+      };
+    });
+  }, [tripStartDate, familyExpenses, familyBudgetSummary.days, familyBudgetSummary.startDate, familyBudgetSummary.totalDailyBudget]);
 
   const todayOpeningInfo = useMemo(
     () => (spotDetail ? getTodayOpeningInfo(spotDetail.openingHours) : null),
@@ -1323,80 +1341,25 @@ export default function Home() {
           </div>
         )}
 
-        {/* ── 장소 탭 ── */}
-        {activeTab === "spot" && (
+        {/* ── 예산 탭 ── */}
+        {activeTab === "budget" && (
           <div className="grid grid-cols-1 gap-4">
-            <section className="ui-panel ui-appear rounded-2xl p-4">
-              <div className="flex items-center justify-between">
-                <h2 className="font-bold text-slate-800">오늘 코스 추천 · 동선 최적화</h2>
-                <button
-                  onClick={() => setSavedSpots([])}
-                  className="text-xs font-semibold text-slate-400 underline"
-                >
-                  저장 목록 비우기
-                </button>
-              </div>
-              <p className="mt-1 text-xs text-slate-500">
-                장소 카드에서 저장한 항목을 거리 기준으로 자동 정렬합니다.
+            <section className="ui-hero ui-appear rounded-3xl p-4 text-white sm:p-6">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/75">
+                Family Budget Planner
               </p>
-
-              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
-                <div className="rounded-xl bg-slate-100 px-3 py-2">
-                  <p className="text-xs text-slate-500">저장한 장소</p>
-                  <p className="text-lg font-black text-slate-800">{savedSpots.length}개</p>
-                </div>
-                <div className="rounded-xl bg-blue-50 px-3 py-2">
-                  <p className="text-xs text-blue-600">예상 이동거리</p>
-                  <p className="text-lg font-black text-blue-700">
-                    {optimizedRoute.totalDistanceKm.toFixed(2)} km
-                  </p>
-                </div>
-                <div className="rounded-xl bg-violet-50 px-3 py-2">
-                  <p className="text-xs text-violet-600">예상 이동시간</p>
-                  <p className="text-sm font-black text-violet-700">
-                    🚶 {routeTimeSummary.walkMin}분 · 🚌 {routeTimeSummary.transitMin}분
-                  </p>
-                </div>
-              </div>
-
-              {optimizedRoute.ordered.length > 0 && (
-                <div className="mt-3 grid gap-2">
-                  {optimizedRoute.ordered.map((spot, index) => (
-                    <div
-                      key={spot.id}
-                      className="flex items-center justify-between rounded-xl border border-white/70 bg-white/75 px-3 py-2"
-                    >
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-bold text-slate-800">
-                          {index + 1}. {spot.name}
-                        </p>
-                        <p className="truncate text-xs text-slate-500">{spot.address}</p>
-                      </div>
-                      <button
-                        onClick={() => setSavedSpots((prev) => prev.filter((item) => item.id !== spot.id))}
-                        className="ml-3 text-xs font-semibold text-slate-400 underline"
-                      >
-                        제거
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <div className="mt-3 flex justify-end">
-                <button
-                  onClick={() => void shareSavedCourse()}
-                  disabled={savedSpots.length === 0}
-                  className="rounded-xl bg-gradient-to-r from-teal-700 to-cyan-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                >
-                  저장 코스 공유
-                </button>
-              </div>
+              <h2 className="mt-2 text-xl font-black leading-tight sm:text-2xl">
+                가족 단위 여행 일정표
+                <br className="sm:hidden" /> 예산 트래커
+              </h2>
+              <p className="mt-1 text-xs text-white/85 sm:text-sm">
+                구성원별 지출, 카테고리 비중, 일자별 예산 페이스를 한 화면에서 확인하세요.
+              </p>
             </section>
 
-            <section className="ui-panel ui-appear rounded-2xl p-4">
+            <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
               <div className="flex items-center justify-between">
-                <h2 className="font-bold text-slate-800">가족 예산 트래커 · 일정 연동</h2>
+                <h2 className="font-bold text-slate-800">예산 요약</h2>
                 <button
                   onClick={clearFamilyExpenses}
                   className="text-xs font-semibold text-slate-400 underline"
@@ -1404,9 +1367,6 @@ export default function Home() {
                   지출 전체 초기화
                 </button>
               </div>
-              <p className="mt-1 text-xs text-slate-500">
-                여행 일수와 가족 구성원을 기준으로 일정표 예산을 계산합니다.
-              </p>
 
               <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
                 <div className="rounded-xl bg-slate-100 px-3 py-2 text-center">
@@ -1414,7 +1374,7 @@ export default function Home() {
                   <p className="text-base font-black text-slate-800">{familyMembers.length}명</p>
                 </div>
                 <div className="rounded-xl bg-slate-100 px-3 py-2 text-center">
-                  <p className="text-xs text-slate-500">여행 일수</p>
+                  <p className="text-xs text-slate-500">여행 일정</p>
                   <p className="text-base font-black text-slate-800">{familyBudgetSummary.days}일</p>
                 </div>
                 <div className="rounded-xl bg-blue-50 px-3 py-2 text-center">
@@ -1423,42 +1383,103 @@ export default function Home() {
                     {Math.round(familyBudgetSummary.totalTripBudget).toLocaleString()} TWD
                   </p>
                 </div>
-                <div className={`rounded-xl px-3 py-2 text-center ${familyBudgetSummary.remainTwd >= 0 ? "bg-emerald-50" : "bg-amber-50"}`}>
-                  <p className={`text-xs ${familyBudgetSummary.remainTwd >= 0 ? "text-emerald-600" : "text-amber-600"}`}>잔액</p>
-                  <p className={`text-base font-black ${familyBudgetSummary.remainTwd >= 0 ? "text-emerald-700" : "text-amber-700"}`}>
+                <div
+                  className={`rounded-xl px-3 py-2 text-center ${familyBudgetSummary.remainTwd >= 0 ? "bg-emerald-50" : "bg-rose-50"}`}
+                >
+                  <p
+                    className={`text-xs ${familyBudgetSummary.remainTwd >= 0 ? "text-emerald-600" : "text-rose-600"}`}
+                  >
+                    남은 예산
+                  </p>
+                  <p
+                    className={`text-base font-black ${familyBudgetSummary.remainTwd >= 0 ? "text-emerald-700" : "text-rose-700"}`}
+                  >
                     {Math.round(familyBudgetSummary.remainTwd).toLocaleString()} TWD
                   </p>
                 </div>
               </div>
 
-              <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                <div className="rounded-xl border border-white/70 bg-white/70 px-3 py-2">
-                  <p className="text-xs text-slate-500">총 사용액</p>
-                  <p className="text-sm font-bold text-slate-700">
-                    {familyBudgetSummary.spentTwd.toLocaleString()} TWD
-                    <span className="ml-1 text-xs text-slate-400">
-                      ({familyBudgetSummary.spentKrw.toLocaleString()}원)
-                    </span>
-                  </p>
+              <div className="mt-3 rounded-xl border border-white/70 bg-white/75 px-3 py-3">
+                <div className="flex items-center justify-between text-xs font-semibold text-slate-500">
+                  <span>예산 사용률</span>
+                  <span>{Math.min(999, familyBudgetSummary.usagePercent).toFixed(1)}%</span>
                 </div>
-                <div className="rounded-xl border border-white/70 bg-white/70 px-3 py-2">
-                  <p className="text-xs text-slate-500">저장 일정 예상비용</p>
-                  <p className="text-sm font-bold text-slate-700">
-                    약 {Math.round(familyBudgetSummary.estimatedSpotCost).toLocaleString()} TWD
+                <div className="mt-1.5 h-2 w-full rounded-full bg-slate-200">
+                  <div
+                    className={`h-2 rounded-full ${
+                      familyBudgetSummary.usagePercent <= 100 ? "bg-gradient-to-r from-emerald-500 to-cyan-600" : "bg-gradient-to-r from-amber-500 to-rose-600"
+                    }`}
+                    style={{ width: `${Math.min(100, familyBudgetSummary.usagePercent)}%` }}
+                  />
+                </div>
+                <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-slate-500 sm:grid-cols-3">
+                  <p>
+                    총 사용액: <span className="font-bold text-slate-700">{familyBudgetSummary.spentTwd.toLocaleString()} TWD</span>
+                  </p>
+                  <p>
+                    환산: <span className="font-bold text-slate-700">{familyBudgetSummary.spentKrw.toLocaleString()} 원</span>
+                  </p>
+                  <p>
+                    잔여 일일 권장:{" "}
+                    <span className="font-bold text-slate-700">
+                      {Math.round(familyBudgetSummary.dailyAllowanceTwd).toLocaleString()} TWD/일
+                    </span>
                   </p>
                 </div>
               </div>
 
-              <div className="mt-3 grid gap-2 sm:grid-cols-[130px_1fr_140px_auto]">
-                <input
-                  type="number"
-                  min={1}
-                  max={30}
-                  value={tripDays}
-                  onChange={(e) => setTripDays(e.target.value)}
-                  className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
-                  placeholder="여행일수"
-                />
+              <div className="mt-3 rounded-xl border border-white/70 bg-white/75 px-3 py-3 text-xs text-slate-600">
+                <p>
+                  여행 시작일:{" "}
+                  <span className="font-semibold text-slate-800">
+                    {formatDateLabel(familyBudgetSummary.startDate)}
+                  </span>
+                </p>
+                <p className="mt-1">
+                  현재 일정:{" "}
+                  <span className="font-semibold text-slate-800">
+                    {familyBudgetSummary.currentTripDay > 0
+                      ? `${familyBudgetSummary.currentTripDay}일차 진행 중`
+                      : "여행 시작 전"}
+                  </span>
+                  {" · "}
+                  남은 일수:{" "}
+                  <span className="font-semibold text-slate-800">
+                    {familyBudgetSummary.daysLeft}일
+                  </span>
+                </p>
+              </div>
+            </section>
+
+            <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
+              <h3 className="font-bold text-slate-800">여행 일정 설정</h3>
+              <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_140px]">
+                <label className="grid gap-1">
+                  <span className="text-xs font-semibold text-slate-500">시작일</span>
+                  <input
+                    type="date"
+                    value={tripStartDate}
+                    onChange={(e) => setTripStartDate(e.target.value)}
+                    className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
+                  />
+                </label>
+                <label className="grid gap-1">
+                  <span className="text-xs font-semibold text-slate-500">여행 일수</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={30}
+                    value={tripDays}
+                    onChange={(e) => setTripDays(e.target.value)}
+                    className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
+                  />
+                </label>
+              </div>
+            </section>
+
+            <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
+              <h3 className="font-bold text-slate-800">가족 구성원별 예산</h3>
+              <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_170px_auto]">
                 <input
                   type="text"
                   value={newMemberName}
@@ -1483,15 +1504,12 @@ export default function Home() {
               </div>
 
               <div className="mt-3 grid gap-2">
-                {familyMembers.map((member) => {
-                  const spent = memberExpenseSummary.get(member.id) ?? { spentTwd: 0, spentKrw: 0 };
-                  const memberTripBudget = member.dailyBudgetTwd * familyBudgetSummary.days;
-                  const memberRemain = memberTripBudget - spent.spentTwd;
-                  return (
-                    <div
-                      key={member.id}
-                      className="grid items-center gap-2 rounded-xl border border-white/70 bg-white/70 px-3 py-2 sm:grid-cols-[110px_140px_1fr_auto]"
-                    >
+                {memberSpendRanking.map(({ member, spent, memberTripBudget, remain }) => (
+                  <div
+                    key={member.id}
+                    className="rounded-xl border border-white/70 bg-white/75 px-3 py-2"
+                  >
+                    <div className="grid items-center gap-2 sm:grid-cols-[100px_130px_1fr_auto]">
                       <p className="truncate text-sm font-bold text-slate-800">{member.name}</p>
                       <input
                         type="number"
@@ -1500,21 +1518,38 @@ export default function Home() {
                         onChange={(e) => updateFamilyMemberBudget(member.id, e.target.value)}
                         className="rounded-lg border border-white/70 bg-white px-2 py-1 text-sm outline-none ring-teal-400/40 focus:ring"
                       />
-                      <p className="text-xs text-slate-600">
-                        예산 {Math.round(memberTripBudget).toLocaleString()} TWD · 사용 {Math.round(spent.spentTwd).toLocaleString()} TWD · 잔액 {Math.round(memberRemain).toLocaleString()} TWD
-                      </p>
+                      <div>
+                        <p className="text-xs text-slate-600">
+                          사용 {Math.round(spent.spentTwd).toLocaleString()} / 예산 {Math.round(memberTripBudget).toLocaleString()} TWD
+                        </p>
+                        <div className="mt-1 h-1.5 rounded-full bg-slate-200">
+                          <div
+                            className={`h-1.5 rounded-full ${remain >= 0 ? "bg-teal-600" : "bg-rose-500"}`}
+                            style={{ width: `${Math.min(100, memberTripBudget > 0 ? (spent.spentTwd / memberTripBudget) * 100 : 0)}%` }}
+                          />
+                        </div>
+                      </div>
                       <button
                         onClick={() => removeFamilyMember(member.id)}
                         className="text-xs font-semibold text-slate-400 underline"
                       >
-                        구성원 삭제
+                        삭제
                       </button>
                     </div>
-                  );
-                })}
+                    <p className="mt-1 text-xs text-slate-500">
+                      남은 예산 {Math.round(remain).toLocaleString()} TWD · 기록 {spent.expenseCount}건
+                    </p>
+                  </div>
+                ))}
               </div>
+            </section>
 
-              <div className="mt-3 grid gap-2 sm:grid-cols-[150px_150px_1fr_auto]">
+            <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
+              <h3 className="font-bold text-slate-800">지출 기록</h3>
+              <p className="mt-1 text-xs text-slate-500">
+                가족 공통으로 기록하면 구성원별 통계에 균등 분배됩니다.
+              </p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-[170px_130px_160px_1fr_auto]">
                 <select
                   value={selectedExpenseMemberId}
                   onChange={(e) => setSelectedExpenseMemberId(e.target.value)}
@@ -1523,6 +1558,18 @@ export default function Home() {
                   {familyMembers.map((member) => (
                     <option key={member.id} value={member.id}>
                       {member.name}
+                    </option>
+                  ))}
+                  <option value={SHARED_MEMBER_ID}>가족 공통(균등 분배)</option>
+                </select>
+                <select
+                  value={expenseCategoryInput}
+                  onChange={(e) => setExpenseCategoryInput(e.target.value as ExpenseCategory)}
+                  className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
+                >
+                  {EXPENSE_CATEGORY_META.map((category) => (
+                    <option key={category.value} value={category.value}>
+                      {category.icon} {category.label}
                     </option>
                   ))}
                 </select>
@@ -1546,7 +1593,7 @@ export default function Home() {
                   onClick={addFamilyExpense}
                   className="rounded-xl bg-gradient-to-r from-teal-700 to-cyan-700 px-3 py-2 text-sm font-semibold text-white"
                 >
-                  지출 추가
+                  추가
                 </button>
               </div>
 
@@ -1558,18 +1605,25 @@ export default function Home() {
                 {familyExpenses.length === 0 ? (
                   <p className="text-sm text-slate-400">아직 기록된 가족 지출이 없습니다.</p>
                 ) : (
-                  familyExpenses.slice(0, 8).map((expense) => {
-                    const memberName = familyMembers.find((member) => member.id === expense.memberId)?.name ?? "구성원";
+                  familyExpenses.slice(0, 12).map((expense) => {
+                    const memberName =
+                      expense.memberId === SHARED_MEMBER_ID
+                        ? "가족 공통"
+                        : familyMembers.find((member) => member.id === expense.memberId)?.name ?? "구성원";
+                    const category =
+                      EXPENSE_CATEGORY_META.find((item) => item.value === expense.category) ??
+                      EXPENSE_CATEGORY_META[EXPENSE_CATEGORY_META.length - 1];
                     return (
                       <div
                         key={expense.id}
-                        className="flex items-center justify-between rounded-xl border border-white/70 bg-white/70 px-3 py-2"
+                        className="flex items-center justify-between rounded-xl border border-white/70 bg-white/75 px-3 py-2"
                       >
                         <div className="min-w-0">
                           <p className="truncate text-sm font-semibold text-slate-700">
                             [{memberName}] {expense.note}
                           </p>
                           <p className="text-xs text-slate-400">
+                            {category.icon} {category.label} ·{" "}
                             {new Date(expense.createdAt).toLocaleString("ko-KR", {
                               month: "numeric",
                               day: "numeric",
@@ -1595,6 +1649,71 @@ export default function Home() {
               </div>
             </section>
 
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
+                <h3 className="font-bold text-slate-800">카테고리별 지출 분석</h3>
+                <div className="mt-3 grid gap-2">
+                  {expenseCategorySummary.map((category) => (
+                    <div
+                      key={category.value}
+                      className="rounded-xl border border-white/70 bg-white/75 px-3 py-2"
+                    >
+                      <div className="flex items-center justify-between text-sm">
+                        <p className="font-semibold text-slate-700">
+                          {category.icon} {category.label}
+                        </p>
+                        <p className="text-xs font-semibold text-slate-500">
+                          {category.count}건 · {category.spentRatio.toFixed(1)}%
+                        </p>
+                      </div>
+                      <div className="mt-1 h-1.5 rounded-full bg-slate-200">
+                        <div
+                          className="h-1.5 rounded-full bg-gradient-to-r from-cyan-500 to-teal-600"
+                          style={{ width: `${Math.min(100, category.spentRatio)}%` }}
+                        />
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">
+                        사용 {Math.round(category.spentTwd).toLocaleString()} TWD · 권장{" "}
+                        {Math.round(familyBudgetSummary.totalTripBudget * category.planRatio).toLocaleString()} TWD
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
+                <h3 className="font-bold text-slate-800">일정표 일차별 예산 페이스</h3>
+                <div className="mt-3 max-h-80 space-y-2 overflow-y-auto pr-1">
+                  {tripDayPlan.map((day) => (
+                    <div
+                      key={day.key}
+                      className="rounded-xl border border-white/70 bg-white/75 px-3 py-2"
+                    >
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm font-semibold text-slate-800">
+                          Day {day.day} · {day.label}
+                        </p>
+                        <p
+                          className={`text-xs font-semibold ${day.remainTwd >= 0 ? "text-emerald-600" : "text-rose-600"}`}
+                        >
+                          {day.remainTwd >= 0 ? "여유" : "초과"}{" "}
+                          {Math.round(Math.abs(day.remainTwd)).toLocaleString()} TWD
+                        </p>
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">
+                        계획 {Math.round(day.plannedTwd).toLocaleString()} · 사용 {Math.round(day.spentTwd).toLocaleString()} TWD
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </div>
+          </div>
+        )}
+
+        {/* ── 장소 탭 ── */}
+        {activeTab === "spot" && (
+          <div className="grid grid-cols-1 gap-4">
             {/* 필터 바 */}
             <div className="ui-panel ui-appear rounded-2xl p-4">
               <div className="scrollbar-none flex gap-2 overflow-x-auto pb-0.5">
@@ -1767,19 +1886,6 @@ export default function Home() {
                           </div>
                         </div>
                       </button>
-
-                      <div className="ml-2 flex flex-col items-end justify-between">
-                        <button
-                          onClick={() => toggleSavedSpot(normalizeSavedSpotFromList(spot))}
-                          className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                            isSavedSpot(spot.id)
-                              ? "bg-amber-100 text-amber-700"
-                              : "bg-slate-100 text-slate-600"
-                          }`}
-                        >
-                          {isSavedSpot(spot.id) ? "★ 저장됨" : "☆ 저장"}
-                        </button>
-                      </div>
                     </article>
                   ))
                 )}
@@ -1866,16 +1972,6 @@ export default function Home() {
                           </div>
                           <p className="mt-1 text-sm text-slate-500">{spotDetail.address}</p>
                           <div className="mt-2 flex flex-wrap gap-2">
-                            <button
-                              onClick={() => toggleSavedSpot(normalizeSavedSpotFromDetail(spotDetail))}
-                              className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                                isSavedSpot(spotDetail.id)
-                                  ? "bg-amber-100 text-amber-700"
-                                  : "bg-slate-100 text-slate-600"
-                              }`}
-                            >
-                              {isSavedSpot(spotDetail.id) ? "★ 코스에 저장됨" : "☆ 코스에 저장"}
-                            </button>
                             <button
                               onClick={() => void copyText(`${spotDetail.name} - ${spotDetail.address}`, "장소 정보")}
                               className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600"
@@ -2010,7 +2106,7 @@ export default function Home() {
 
       {/* 모바일 하단 탭바 */}
       <nav className="safe-bottom-nav fixed bottom-0 left-0 right-0 z-30 border-t border-white/60 bg-slate-50/85 backdrop-blur sm:hidden">
-        <div className="grid grid-cols-4">
+        <div className="grid grid-cols-5">
           {TAB_ITEMS.map(({ tab, icon, label }) => (
             <button
               key={tab}
