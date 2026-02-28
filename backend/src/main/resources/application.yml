@@ -2,7 +2,7 @@ spring:
   application:
     name: travel-taipei-backend
   datasource:
-    url: jdbc:postgresql://${PGHOST:localhost}:${PGPORT:5432}/${PGDATABASE:travel_taipei}
+    url: jdbc:postgresql://${PGHOST:localhost}:${PGPORT:5432}/${PGDATABASE:travel_taipei}?sslmode=${PGSSLMODE:disable}
     username: ${PGUSER:postgres}
     password: ${PGPASSWORD:}
     driver-class-name: org.postgresql.Driver
