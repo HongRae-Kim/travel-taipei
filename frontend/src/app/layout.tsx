@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Travel Taipei API Dashboard",
-  description: "Frontend dashboard connected to Travel Taipei backend APIs",
+  title: "Travel Taipei Live Dashboard",
+  description: "Weather, exchange, phrase and place recommendation dashboard for Taipei travel.",
 };
 
 export default function RootLayout({
@@ -12,7 +12,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="ko">
       <body className="antialiased">{children}</body>
     </html>
   );

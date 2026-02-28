@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type ApiEnvelope<T> = {
   success: boolean;
@@ -53,10 +53,24 @@ type SpotDetailResponse = {
   lng: number;
 };
 
+type PhraseResponse = {
+  id: number;
+  category: string;
+  korean: string;
+  chinese: string;
+  pronunciation: string;
+};
+
+type WeatherForecastItem = {
+  date: string;
+  minTemp: number;
+  maxTemp: number;
+  description: string;
+  iconUrl: string;
+};
+
 type SpotFilters = {
   type: "restaurant" | "cafe" | "attraction";
-  lat: string;
-  lng: string;
   radius: string;
   openNow: boolean;
   minRating: string;
@@ -64,28 +78,26 @@ type SpotFilters = {
 
 const INITIAL_FILTERS: SpotFilters = {
   type: "restaurant",
-  lat: "",
-  lng: "",
   radius: "5000",
   openNow: false,
   minRating: "",
 };
 
-async function requestApi<T>(url: string): Promise<T> {
-  const response = await fetch(url, { cache: "no-store" });
+const PHRASE_CATEGORIES = [
+  { value: "airport", label: "✈️ 공항" },
+  { value: "transport", label: "🚇 교통" },
+  { value: "hotel", label: "🏨 숙소" },
+  { value: "restaurant", label: "🍜 음식점" },
+  { value: "shopping", label: "🛍 쇼핑" },
+  { value: "emergency", label: "🚨 긴급" },
+];
 
-  let payload: ApiEnvelope<T> | null = null;
-  try {
-    payload = (await response.json()) as ApiEnvelope<T>;
-  } catch {
-    throw new Error("응답 파싱에 실패했습니다.");
-  }
+type Tab = "home" | "phrase" | "spot";
 
-  if (!response.ok || !payload.success) {
-    throw new Error(payload.message || "요청에 실패했습니다.");
-  }
-
-  return payload.data;
+function travelTime(distanceKm: number) {
+  const walkMin = Math.max(1, Math.round((distanceKm / 4.5) * 60));
+  const transitMin = Math.max(5, Math.round((distanceKm / 22) * 60));
+  return { walkMin, transitMin };
 }
 
 function typeLabel(type: string) {
@@ -94,70 +106,149 @@ function typeLabel(type: string) {
   return "관광지";
 }
 
+async function requestApi<T>(url: string): Promise<T> {
+  const response = await fetch(url, { cache: "no-store" });
+  let payload: ApiEnvelope<T> | null = null;
+  try {
+    payload = (await response.json()) as ApiEnvelope<T>;
+  } catch {
+    throw new Error("응답 파싱에 실패했습니다.");
+  }
+  if (!response.ok || !payload.success) {
+    throw new Error(payload.message || "요청에 실패했습니다.");
+  }
+  return payload.data;
+}
+
 export default function Home() {
+  const [activeTab, setActiveTab] = useState<Tab>("home");
+
+  // 날씨 / 환율
   const [weather, setWeather] = useState<WeatherResponse | null>(null);
+  const [forecast, setForecast] = useState<WeatherForecastItem[]>([]);
   const [exchange, setExchange] = useState<ExchangeRateResponse | null>(null);
+  const [loadingSummary, setLoadingSummary] = useState(true);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [krwInput, setKrwInput] = useState("10000");
+
+  // 회화
+  const [phrases, setPhrases] = useState<PhraseResponse[]>([]);
+  const [selectedCategory, setSelectedCategory] = useState("airport");
+  const [loadingPhrases, setLoadingPhrases] = useState(false);
+
+  // 장소
   const [spots, setSpots] = useState<SpotResponse[]>([]);
   const [spotDetail, setSpotDetail] = useState<SpotDetailResponse | null>(null);
-
   const [filters, setFilters] = useState<SpotFilters>(INITIAL_FILTERS);
   const [selectedSpotId, setSelectedSpotId] = useState<string | null>(null);
-
-  const [loadingSummary, setLoadingSummary] = useState(true);
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [locating, setLocating] = useState(false);
   const [loadingSpots, setLoadingSpots] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
-
-  const [summaryError, setSummaryError] = useState<string | null>(null);
   const [spotError, setSpotError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const touchStartX = useRef<number | null>(null);
+  const lightboxImages = spotDetail?.photoUrls ?? [];
 
   useEffect(() => {
     void loadSummary();
     void searchSpots(INITIAL_FILTERS);
+    void loadPhrases("airport");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (lightboxIndex === null) return;
+    const len = lightboxImages.length;
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === "ArrowLeft")
+        setLightboxIndex((p) => (p === null ? null : (p - 1 + len) % len));
+      else if (e.key === "ArrowRight")
+        setLightboxIndex((p) => (p === null ? null : (p + 1) % len));
+      else if (e.key === "Escape") setLightboxIndex(null);
+    }
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [lightboxIndex, lightboxImages.length]);
+
+  // ── API 호출 ──────────────────────────────────────────────────────────
 
   async function loadSummary() {
     setLoadingSummary(true);
     setSummaryError(null);
-
     try {
-      const [weatherData, exchangeData] = await Promise.all([
+      const [weatherData, forecastData, exchangeData] = await Promise.all([
         requestApi<WeatherResponse>("/api/travel/weather"),
+        requestApi<WeatherForecastItem[]>("/api/travel/weather/forecast"),
         requestApi<ExchangeRateResponse>("/api/travel/exchange-rates"),
       ]);
       setWeather(weatherData);
+      setForecast(forecastData);
       setExchange(exchangeData);
     } catch (error) {
-      setSummaryError(
-        error instanceof Error ? error.message : "요약 정보를 불러오지 못했습니다."
-      );
+      setSummaryError(error instanceof Error ? error.message : "정보를 불러오지 못했습니다.");
     } finally {
       setLoadingSummary(false);
     }
   }
 
-  async function searchSpots(nextFilters = filters) {
+  async function loadPhrases(category: string) {
+    setLoadingPhrases(true);
+    try {
+      const data = await requestApi<PhraseResponse[]>(`/api/travel/phrases/${category}`);
+      setPhrases(data);
+    } catch {
+      setPhrases([]);
+    } finally {
+      setLoadingPhrases(false);
+    }
+  }
+
+  function handleCategoryChange(category: string) {
+    setSelectedCategory(category);
+    void loadPhrases(category);
+  }
+
+  async function detectLocation() {
+    if (!navigator.geolocation) {
+      setSpotError("이 브라우저는 위치 감지를 지원하지 않습니다.");
+      return;
+    }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setUserLocation(loc);
+        setLocating(false);
+        void searchSpotsWithLocation(loc, filters);
+      },
+      () => {
+        setSpotError("위치 권한이 거부됐습니다. 브라우저 설정에서 허용해주세요.");
+        setLocating(false);
+      }
+    );
+  }
+
+  async function searchSpotsWithLocation(
+    loc: { lat: number; lng: number } | null,
+    nextFilters: SpotFilters
+  ) {
     setLoadingSpots(true);
     setSpotError(null);
-
     try {
       const params = new URLSearchParams({
         type: nextFilters.type,
         radius: nextFilters.radius || "5000",
         openNow: String(nextFilters.openNow),
       });
-
-      if (nextFilters.lat.trim()) {
-        params.set("lat", nextFilters.lat.trim());
-      }
-      if (nextFilters.lng.trim()) {
-        params.set("lng", nextFilters.lng.trim());
+      if (loc) {
+        params.set("lat", String(loc.lat));
+        params.set("lng", String(loc.lng));
       }
       if (nextFilters.minRating.trim()) {
         params.set("minRating", nextFilters.minRating.trim());
       }
-
       const data = await requestApi<SpotResponse[]>(`/api/travel/spots?${params.toString()}`);
       setSpots(data);
       setSpotDetail(null);
@@ -170,11 +261,19 @@ export default function Home() {
     }
   }
 
+  function searchSpots(nextFilters = filters) {
+    return searchSpotsWithLocation(userLocation, nextFilters);
+  }
+
+  function closeDetail() {
+    setSelectedSpotId(null);
+    setSpotDetail(null);
+  }
+
   async function loadSpotDetail(spotId: string) {
     setLoadingDetail(true);
     setDetailError(null);
     setSelectedSpotId(spotId);
-
     try {
       const detail = await requestApi<SpotDetailResponse>(
         `/api/travel/spots/${spotId}?type=${filters.type}`
@@ -189,261 +288,679 @@ export default function Home() {
   }
 
   const spotCountLabel = useMemo(() => {
-    if (loadingSpots) {
-      return "불러오는 중";
-    }
+    if (loadingSpots) return "조회 중...";
     return `${spots.length}개 장소`;
   }, [loadingSpots, spots.length]);
 
+  // ── UI ───────────────────────────────────────────────────────────────
+
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_10%_0%,#fee8d6_0%,transparent_35%),radial-gradient(circle_at_100%_10%,#dff3ec_0%,transparent_40%),linear-gradient(180deg,#f6f8fb_0%,#f4efe7_100%)] px-5 py-8 text-slate-900 md:px-10">
-      <main className="mx-auto w-full max-w-6xl">
-        <section className="rounded-3xl border border-white/60 bg-white/75 p-6 shadow-[0_18px_55px_-30px_rgba(20,24,40,.35)] backdrop-blur md:p-8">
-          <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-teal-700">Travel Taipei</p>
-              <h1 className="mt-3 text-3xl font-black tracking-tight md:text-5xl">Frontend API 연결 대시보드</h1>
-              <p className="mt-3 max-w-2xl text-sm text-slate-600 md:text-base">
-                백엔드 환율/날씨/장소추천 API를 한 화면에서 호출하고 결과를 바로 확인할 수 있습니다.
-              </p>
-            </div>
-            <button
-              onClick={() => {
-                void loadSummary();
-                void searchSpots();
-              }}
-              className="inline-flex w-full items-center justify-center rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700 md:w-auto"
-            >
-              전체 새로고침
-            </button>
-          </div>
-        </section>
+    <div className="ui-shell">
 
-        {summaryError ? (
-          <p className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-            {summaryError}
-          </p>
-        ) : null}
+      {/* 라이트박스 */}
+      {lightboxIndex !== null && lightboxImages[lightboxIndex] && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm"
+          onClick={() => setLightboxIndex(null)}
+          onTouchStart={(e) => { touchStartX.current = e.touches[0].clientX; }}
+          onTouchEnd={(e) => {
+            if (touchStartX.current === null) return;
+            const delta = e.changedTouches[0].clientX - touchStartX.current;
+            const len = lightboxImages.length;
+            if (delta > 50) setLightboxIndex((p) => (p === null ? null : (p - 1 + len) % len));
+            else if (delta < -50) setLightboxIndex((p) => (p === null ? null : (p + 1) % len));
+            touchStartX.current = null;
+          }}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={lightboxImages[lightboxIndex]}
+            alt="확대 이미지"
+            className="max-h-[90dvh] max-w-[80vw] rounded-2xl object-contain shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+            draggable={false}
+          />
 
-        <section className="mt-6 grid gap-4 md:grid-cols-2">
-          <article className="rounded-3xl border border-white/60 bg-white/80 p-5 shadow-[0_16px_40px_-30px_rgba(0,0,0,.35)]">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-extrabold">오늘의 환율</h2>
-              <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">KRW ↔ TWD</span>
-            </div>
-            {loadingSummary ? (
-              <p className="mt-5 text-sm text-slate-500">환율 정보를 불러오는 중...</p>
-            ) : exchange ? (
-              <div className="mt-5 grid gap-3">
-                <p className="text-3xl font-black">
-                  {exchange.baseRate.toFixed(2)} <span className="text-sm font-semibold text-slate-500">기준가</span>
-                </p>
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div className="rounded-xl bg-slate-100/80 p-3">매수: {exchange.buyRate.toFixed(2)}</div>
-                  <div className="rounded-xl bg-slate-100/80 p-3">매도: {exchange.sellRate.toFixed(2)}</div>
-                </div>
-                <p className="text-xs text-slate-500">기준일: {exchange.date}</p>
-              </div>
-            ) : (
-              <p className="mt-5 text-sm text-slate-500">환율 데이터 없음</p>
-            )}
-          </article>
+          {/* 닫기 */}
+          <button
+            className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-white/20 text-white hover:bg-white/30"
+            onClick={() => setLightboxIndex(null)}
+          >
+            ✕
+          </button>
 
-          <article className="rounded-3xl border border-white/60 bg-white/80 p-5 shadow-[0_16px_40px_-30px_rgba(0,0,0,.35)]">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-extrabold">타이베이 날씨</h2>
-              <span className="rounded-full bg-sky-100 px-3 py-1 text-xs font-semibold text-sky-800">실시간</span>
-            </div>
-            {loadingSummary ? (
-              <p className="mt-5 text-sm text-slate-500">날씨 정보를 불러오는 중...</p>
-            ) : weather ? (
-              <div className="mt-5 flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-slate-500">{weather.city}</p>
-                  <p className="mt-1 text-3xl font-black">{weather.temperature.toFixed(1)}°C</p>
-                  <p className="mt-1 text-sm text-slate-600">
-                    체감 {weather.feelsLike.toFixed(1)}°C · 습도 {weather.humidity}% · 풍속 {weather.windSpeed.toFixed(1)}m/s
-                  </p>
-                  <p className="mt-1 text-xs text-slate-500">{weather.description}</p>
-                </div>
-                {weather.iconUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={weather.iconUrl} alt={weather.description} className="h-18 w-18 rounded-xl bg-slate-100 p-1" />
-                ) : null}
-              </div>
-            ) : (
-              <p className="mt-5 text-sm text-slate-500">날씨 데이터 없음</p>
-            )}
-          </article>
-        </section>
-
-        <section className="mt-6 rounded-3xl border border-white/60 bg-white/80 p-5 shadow-[0_16px_40px_-30px_rgba(0,0,0,.35)]">
-          <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-            <div>
-              <h2 className="text-xl font-extrabold">장소추천 API</h2>
-              <p className="mt-1 text-sm text-slate-600">필터를 바꿔가며 `/api/spots` 결과를 바로 확인할 수 있습니다.</p>
-            </div>
-            <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">{spotCountLabel}</span>
-          </div>
-
-          <div className="mt-5 grid gap-3 md:grid-cols-6">
-            <label className="grid gap-1 text-sm">
-              타입
-              <select
-                value={filters.type}
-                onChange={(event) => setFilters((prev) => ({ ...prev, type: event.target.value as SpotFilters["type"] }))}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+          {/* 이전 / 다음 — 이미지가 2장 이상일 때만 */}
+          {lightboxImages.length > 1 && (
+            <>
+              <button
+                className="absolute left-3 top-1/2 -translate-y-1/2 flex h-11 w-11 items-center justify-center rounded-full bg-white/20 text-2xl text-white hover:bg-white/35 sm:left-6"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setLightboxIndex((p) => (p === null ? null : (p - 1 + lightboxImages.length) % lightboxImages.length));
+                }}
               >
-                <option value="restaurant">restaurant</option>
-                <option value="cafe">cafe</option>
-                <option value="attraction">attraction</option>
-              </select>
-            </label>
-            <label className="grid gap-1 text-sm">
-              위도(lat)
-              <input
-                value={filters.lat}
-                onChange={(event) => setFilters((prev) => ({ ...prev, lat: event.target.value }))}
-                placeholder="예: 25.0330"
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-              />
-            </label>
-            <label className="grid gap-1 text-sm">
-              경도(lng)
-              <input
-                value={filters.lng}
-                onChange={(event) => setFilters((prev) => ({ ...prev, lng: event.target.value }))}
-                placeholder="예: 121.5654"
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-              />
-            </label>
-            <label className="grid gap-1 text-sm">
-              반경(m)
-              <input
-                value={filters.radius}
-                onChange={(event) => setFilters((prev) => ({ ...prev, radius: event.target.value }))}
-                placeholder="5000"
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-              />
-            </label>
-            <label className="grid gap-1 text-sm">
-              최소 평점
-              <input
-                value={filters.minRating}
-                onChange={(event) => setFilters((prev) => ({ ...prev, minRating: event.target.value }))}
-                placeholder="4.0"
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-              />
-            </label>
-            <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
-              <input
-                type="checkbox"
-                checked={filters.openNow}
-                onChange={(event) => setFilters((prev) => ({ ...prev, openNow: event.target.checked }))}
-              />
-              영업 중만
-            </label>
+                ‹
+              </button>
+              <button
+                className="absolute right-3 top-1/2 -translate-y-1/2 flex h-11 w-11 items-center justify-center rounded-full bg-white/20 text-2xl text-white hover:bg-white/35 sm:right-6"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setLightboxIndex((p) => (p === null ? null : (p + 1) % lightboxImages.length));
+                }}
+              >
+                ›
+              </button>
+              {/* 인덱스 */}
+              <p className="absolute bottom-5 left-1/2 -translate-x-1/2 rounded-full bg-black/50 px-3 py-1 text-xs text-white/90">
+                {lightboxIndex + 1} / {lightboxImages.length}
+              </p>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* 헤더 */}
+      <header className="ui-header sticky top-0 z-30">
+        <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xl">🇹🇼</span>
+            <span className="bg-gradient-to-r from-teal-800 to-cyan-800 bg-clip-text text-base font-black tracking-tight text-transparent">
+              Travel Taipei
+            </span>
           </div>
+          {/* 데스크탑 탭 */}
+          <nav className="hidden items-center gap-2 rounded-full border border-white/60 bg-white/60 p-1 sm:flex">
+            {(["home", "phrase", "spot"] as Tab[]).map((tab) => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                className={`ui-tab ${activeTab === tab ? "ui-tab-active" : ""}`}
+              >
+                {tab === "home" ? "🏠 홈" : tab === "phrase" ? "💬 회화" : "📍 장소"}
+              </button>
+            ))}
+          </nav>
+        </div>
+      </header>
 
-          <div className="mt-4 flex flex-wrap gap-2">
-            <button
-              onClick={() => void searchSpots()}
-              className="rounded-xl bg-teal-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-600"
-            >
-              추천 다시 조회
-            </button>
-            <button
-              onClick={() => {
-                setFilters(INITIAL_FILTERS);
-                void searchSpots(INITIAL_FILTERS);
-              }}
-              className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-            >
-              필터 초기화
-            </button>
-          </div>
+      {/* 콘텐츠 */}
+      <main className="mx-auto max-w-5xl px-4 pb-24 pt-6 sm:pb-10">
 
-          {spotError ? (
-            <p className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{spotError}</p>
-          ) : null}
+        {/* ── 홈 탭 ── */}
+        {activeTab === "home" && (
+          <div className="grid gap-4">
+            <section className="ui-hero ui-appear rounded-3xl p-4 text-white sm:p-6">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/75">
+                Live Travel Snapshot
+              </p>
+              <div className="mt-2 flex items-end justify-between gap-3">
+                <div>
+                  <h1 className="text-xl font-black leading-tight sm:text-3xl">
+                    Taipei Trip<br className="sm:hidden" /> Control Panel
+                  </h1>
+                  <p className="mt-1 text-xs text-white/85 sm:text-sm">
+                    날씨, 환율, 장소 추천을 한 화면에서 관리하세요.
+                  </p>
+                </div>
+                <div className="hidden shrink-0 rounded-2xl border border-white/40 bg-white/20 px-4 py-2 text-right sm:block">
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-white/70">Updated</p>
+                  <p className="text-sm font-semibold">
+                    {new Date().toLocaleDateString("ko-KR", {
+                      month: "long",
+                      day: "numeric",
+                      weekday: "short",
+                    })}
+                  </p>
+                </div>
+              </div>
+            </section>
+            {summaryError && (
+              <div className="ui-panel ui-appear rounded-2xl border-rose-300/70 bg-rose-50/85 px-4 py-3 text-sm text-rose-700">
+                {summaryError}
+              </div>
+            )}
 
-          <div className="mt-5 grid gap-4 lg:grid-cols-[1.5fr_1fr]">
-            <div className="grid gap-3">
-              {loadingSpots ? (
-                <p className="rounded-xl bg-slate-100 px-4 py-6 text-sm text-slate-500">장소 목록을 불러오는 중...</p>
-              ) : spots.length === 0 ? (
-                <p className="rounded-xl bg-slate-100 px-4 py-6 text-sm text-slate-500">조건에 맞는 장소가 없습니다.</p>
-              ) : (
-                spots.map((spot) => (
-                  <button
-                    key={spot.id}
-                    onClick={() => void loadSpotDetail(spot.id)}
-                    className={`grid gap-2 rounded-2xl border px-4 py-4 text-left transition ${
-                      selectedSpotId === spot.id
-                        ? "border-teal-500 bg-teal-50"
-                        : "border-slate-200 bg-white hover:border-slate-300"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{typeLabel(spot.type)}</p>
-                        <p className="mt-1 text-base font-bold">{spot.name}</p>
+            {/* 날씨 */}
+            <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
+              <div className="flex items-center justify-between">
+                <h2 className="font-bold text-slate-800">타이베이 현재 날씨</h2>
+                <button
+                  onClick={() => void loadSummary()}
+                  className="rounded-lg border border-white/70 bg-white/70 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-white"
+                >
+                  새로고침
+                </button>
+              </div>
+              {loadingSummary ? (
+                <p className="mt-4 text-sm text-slate-400">불러오는 중...</p>
+              ) : weather ? (
+                <>
+                  <div className="mt-4 flex items-center gap-4">
+                    {weather.iconUrl && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={weather.iconUrl} alt={weather.description} className="h-16 w-16" />
+                    )}
+                    <div>
+                      <p className="text-4xl font-black">{weather.temperature.toFixed(1)}°C</p>
+                      <p className="mt-1 text-sm font-medium text-slate-500">{weather.description}</p>
+                    </div>
+                  </div>
+                  <div className="mt-4 grid grid-cols-3 gap-2 text-center text-xs">
+                    {[
+                      { label: "체감", value: `${weather.feelsLike.toFixed(1)}°C` },
+                      { label: "습도", value: `${weather.humidity}%` },
+                      { label: "풍속", value: `${weather.windSpeed.toFixed(1)}m/s` },
+                    ].map((item) => (
+                      <div key={item.label} className="rounded-xl bg-slate-50 py-2">
+                        <p className="text-slate-400">{item.label}</p>
+                        <p className="mt-0.5 font-bold text-slate-700">{item.value}</p>
                       </div>
-                      <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
-                        ⭐ {spot.rating?.toFixed(1) ?? "-"}
-                      </span>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <p className="mt-4 text-sm text-slate-400">날씨 데이터 없음</p>
+              )}
+            </section>
+
+            {/* 5일 예보 */}
+            {forecast.length > 0 && (
+              <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
+                <h2 className="font-bold text-slate-700">5일 예보</h2>
+                <div className="scrollbar-none mt-3 flex gap-2 overflow-x-auto pb-1">
+                  {forecast.map((day) => (
+                    <div
+                      key={day.date}
+                      className="flex w-24 shrink-0 flex-col items-center rounded-xl border border-white/70 bg-white/70 py-3 text-center"
+                    >
+                      <p className="text-xs font-semibold text-slate-400">
+                        {new Date(day.date + "T00:00:00").toLocaleDateString("ko-KR", {
+                          month: "numeric",
+                          day: "numeric",
+                          weekday: "short",
+                        })}
+                      </p>
+                      {day.iconUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={day.iconUrl} alt={day.description} className="h-10 w-10" />
+                      ) : (
+                        <div className="h-10 w-10" />
+                      )}
+                      <p className="text-xs text-slate-500">{day.description}</p>
+                      <div className="mt-1 flex gap-1 text-xs font-bold">
+                        <span className="text-blue-500">{day.minTemp.toFixed(0)}°</span>
+                        <span className="text-slate-300">/</span>
+                        <span className="text-orange-400">{day.maxTemp.toFixed(0)}°</span>
+                      </div>
                     </div>
-                    <p className="text-sm text-slate-600">{spot.address}</p>
-                    <div className="flex flex-wrap gap-2 text-xs">
-                      <span className="rounded-full bg-emerald-100 px-2 py-1 font-semibold text-emerald-800">
-                        거리 {spot.distanceKm.toFixed(2)}km
-                      </span>
-                      <span className="rounded-full bg-amber-100 px-2 py-1 font-semibold text-amber-800">{spot.reason}</span>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* 환율 */}
+            <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
+              <h2 className="font-bold text-slate-700">환율 · KRW ↔ TWD</h2>
+              {loadingSummary ? (
+                <p className="mt-4 text-sm text-slate-400">불러오는 중...</p>
+              ) : exchange ? (
+                <div className="mt-4 grid gap-3">
+                  <p className="text-2xl font-black">
+                    {exchange.baseRate.toFixed(2)}
+                    <span className="ml-1 text-sm font-semibold text-slate-400">원 = 1 TWD</span>
+                  </p>
+
+                  {/* 계산기 */}
+                  <div className="flex items-center gap-2">
+                    <div className="flex min-w-0 flex-1 items-center gap-1 rounded-xl border border-white/70 bg-white/70 px-3 py-2.5">
+                      <input
+                        type="number"
+                        inputMode="decimal"
+                        value={krwInput}
+                        onChange={(e) => setKrwInput(e.target.value)}
+                        className="min-w-0 w-full bg-transparent text-base text-right font-bold outline-none"
+                        min={0}
+                      />
+                      <span className="shrink-0 text-sm font-semibold text-slate-400">원</span>
                     </div>
-                  </button>
+                    <span className="shrink-0 text-slate-300">→</span>
+                    <div className="flex min-w-0 flex-1 items-center gap-1 rounded-xl border border-teal-300/70 bg-teal-50/75 px-3 py-2.5">
+                      <span className="min-w-0 w-full truncate text-right text-base font-bold text-teal-800">
+                        {exchange.baseRate > 0 && krwInput
+                          ? (parseFloat(krwInput) / exchange.baseRate).toFixed(2)
+                          : "0.00"}
+                      </span>
+                      <span className="shrink-0 text-sm font-semibold text-teal-600">TWD</span>
+                    </div>
+                  </div>
+
+                  {/* 빠른 금액 버튼 — grid로 균등 배분, 절대 overflow 없음 */}
+                  <div className="grid grid-cols-4 gap-2">
+                    {[1000, 5000, 10000, 50000].map((v) => (
+                      <button
+                        key={v}
+                        onClick={() => setKrwInput(String(v))}
+                        className="rounded-lg border border-white/70 bg-white/75 py-1.5 text-xs font-semibold text-slate-700 hover:bg-white"
+                      >
+                        {v.toLocaleString()}
+                      </button>
+                    ))}
+                  </div>
+
+                  <p className="text-xs text-slate-400">기준일 {exchange.date}</p>
+                </div>
+              ) : (
+                <p className="mt-4 text-sm text-slate-400">환율 데이터 없음</p>
+              )}
+            </section>
+          </div>
+        )}
+
+        {/* ── 회화 탭 ── */}
+        {activeTab === "phrase" && (
+          <div className="grid gap-4">
+            {/* 카테고리 칩 */}
+            <div className="flex flex-wrap gap-2">
+              {PHRASE_CATEGORIES.map((cat) => (
+                <button
+                  key={cat.value}
+                  onClick={() => handleCategoryChange(cat.value)}
+                  className={`ui-chip px-4 py-1.5 text-sm font-semibold transition ${
+                    selectedCategory === cat.value
+                      ? "ui-chip-active text-teal-900"
+                      : "text-slate-600 hover:bg-white"
+                  }`}
+                >
+                  {cat.label}
+                </button>
+              ))}
+            </div>
+
+            {/* 문구 목록 */}
+            <div className="grid gap-2">
+              {loadingPhrases ? (
+                <p className="py-10 text-center text-sm text-slate-400">불러오는 중...</p>
+              ) : (
+                phrases.map((phrase) => (
+                  <div
+                    key={phrase.id}
+                    className="ui-panel ui-appear rounded-2xl p-4"
+                  >
+                    <p className="text-sm text-slate-500">{phrase.korean}</p>
+                    <p className="mt-1 text-lg font-bold text-slate-900">{phrase.chinese}</p>
+                    <p className="mt-1 text-sm font-semibold text-teal-700">{phrase.pronunciation}</p>
+                  </div>
                 ))
               )}
             </div>
+          </div>
+        )}
 
-            <aside className="rounded-2xl border border-slate-200 bg-white p-4">
-              <h3 className="text-sm font-black uppercase tracking-[0.16em] text-slate-500">상세 정보</h3>
-              {loadingDetail ? (
-                <p className="mt-4 text-sm text-slate-500">상세 정보를 불러오는 중...</p>
-              ) : detailError ? (
-                <p className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
-                  {detailError}
-                </p>
-              ) : spotDetail ? (
-                <div className="mt-4 grid gap-3">
-                  <p className="text-lg font-bold">{spotDetail.name}</p>
-                  <p className="text-sm text-slate-600">{spotDetail.address}</p>
-                  <p className="text-sm text-slate-600">평점: {spotDetail.rating?.toFixed(1) ?? "-"}</p>
-                  <p className="text-sm text-slate-600">전화: {spotDetail.phone ?? "정보 없음"}</p>
-                  <a
-                    href={spotDetail.website ?? undefined}
-                    target="_blank"
-                    rel="noreferrer"
-                    className={`text-sm font-semibold ${
-                      spotDetail.website ? "text-teal-700 underline" : "pointer-events-none text-slate-400"
+        {/* ── 장소 탭 ── */}
+        {activeTab === "spot" && (
+          <div className="grid gap-4">
+            {/* 필터 바 */}
+            <div className="ui-panel ui-appear rounded-2xl p-4">
+              <div className="scrollbar-none flex gap-2 overflow-x-auto pb-0.5">
+                {(["restaurant", "cafe", "attraction"] as const).map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => {
+                      const next = { ...filters, type: t };
+                      setFilters(next);
+                      void searchSpots(next);
+                    }}
+                    className={`ui-chip shrink-0 px-3 py-1.5 text-sm font-semibold transition ${
+                      filters.type === t
+                        ? "ui-chip-active text-teal-900"
+                        : "text-slate-600 hover:bg-white"
                     }`}
                   >
-                    웹사이트 열기
-                  </a>
-                  {spotDetail.openingHours.length > 0 ? (
-                    <ul className="grid gap-1 rounded-xl bg-slate-100/90 p-3 text-xs text-slate-600">
-                      {spotDetail.openingHours.slice(0, 3).map((line) => (
-                        <li key={line}>{line}</li>
-                      ))}
-                    </ul>
-                  ) : null}
+                    {typeLabel(t)}
+                  </button>
+                ))}
+
+                <select
+                  value={filters.radius}
+                  onChange={(e) => setFilters((prev) => ({ ...prev, radius: e.target.value }))}
+                  className="ui-chip shrink-0 px-3 py-1.5 text-sm font-semibold text-slate-600"
+                >
+                  <option value="1000">1km</option>
+                  <option value="3000">3km</option>
+                  <option value="5000">5km</option>
+                  <option value="10000">10km</option>
+                </select>
+
+                <select
+                  value={filters.minRating}
+                  onChange={(e) => setFilters((prev) => ({ ...prev, minRating: e.target.value }))}
+                  className="ui-chip shrink-0 px-3 py-1.5 text-sm font-semibold text-slate-600"
+                >
+                  <option value="">평점 전체</option>
+                  <option value="3.5">3.5+</option>
+                  <option value="4.0">4.0+</option>
+                  <option value="4.5">4.5+</option>
+                </select>
+
+                <label className="ui-chip flex shrink-0 cursor-pointer items-center gap-1.5 px-3 py-1.5 text-sm font-semibold text-slate-600">
+                  <input
+                    type="checkbox"
+                    checked={filters.openNow}
+                    onChange={(e) => setFilters((prev) => ({ ...prev, openNow: e.target.checked }))}
+                    className="accent-teal-600"
+                  />
+                  영업 중
+                </label>
+              </div>
+
+              <div className="mt-3 flex items-center justify-between gap-2">
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => void detectLocation()}
+                    disabled={locating}
+                    className={`flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-semibold transition disabled:opacity-50 ${
+                      userLocation
+                        ? "border border-teal-300/80 bg-teal-100/70 text-teal-800"
+                        : "bg-slate-900 text-white hover:bg-slate-800"
+                    }`}
+                  >
+                    📍 {locating ? "감지 중..." : userLocation ? "위치 감지됨" : "현재 위치"}
+                  </button>
+                  <button
+                    onClick={() => void searchSpots()}
+                    className="rounded-xl bg-gradient-to-r from-teal-700 to-cyan-700 px-3 py-2 text-sm font-semibold text-white hover:from-teal-600 hover:to-cyan-600"
+                  >
+                    조회
+                  </button>
                 </div>
-              ) : (
-                <p className="mt-4 text-sm text-slate-500">목록에서 장소를 선택하면 상세가 표시됩니다.</p>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-400">{spotCountLabel}</span>
+                  {(userLocation || filters.minRating || filters.openNow) && (
+                    <button
+                      onClick={() => {
+                        setFilters(INITIAL_FILTERS);
+                        setUserLocation(null);
+                        void searchSpotsWithLocation(null, INITIAL_FILTERS);
+                      }}
+                      className="text-xs font-semibold text-slate-400 underline"
+                    >
+                      초기화
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {spotError && (
+              <div className="ui-panel rounded-2xl border-rose-300/70 bg-rose-50/85 px-4 py-3 text-sm text-rose-700">
+                {spotError}
+              </div>
+            )}
+
+            {/* 장소 목록 + 상세 */}
+            <div className="grid gap-3 lg:grid-cols-[1fr_380px]">
+              {/* 목록 */}
+              <div className="grid gap-2 lg:max-h-[calc(100vh-220px)] lg:overflow-y-auto lg:pr-1">
+                {loadingSpots ? (
+                  <p className="ui-panel rounded-2xl py-10 text-center text-sm text-slate-400">
+                    장소를 불러오는 중...
+                  </p>
+                ) : spots.length === 0 ? (
+                  <p className="ui-panel rounded-2xl py-10 text-center text-sm text-slate-400">
+                    조건에 맞는 장소가 없습니다.
+                  </p>
+                ) : (
+                  spots.map((spot) => (
+                    <button
+                      key={spot.id}
+                      onClick={() => void loadSpotDetail(spot.id)}
+                      className={`ui-panel flex gap-3 rounded-2xl p-4 text-left transition ${
+                        selectedSpotId === spot.id
+                          ? "border-teal-400 ring-1 ring-teal-300"
+                          : "hover:border-slate-300"
+                      }`}
+                    >
+                      {/* 썸네일 */}
+                      <div className="shrink-0">
+                        {spot.photoUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={spot.photoUrl}
+                            alt={spot.name}
+                            className="h-16 w-16 rounded-xl object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-16 w-16 items-center justify-center rounded-xl bg-slate-100 text-2xl">
+                            {spot.type === "restaurant" ? "🍜" : spot.type === "cafe" ? "☕" : "🏛"}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 정보 */}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="truncate font-bold">{spot.name}</p>
+                          <span className="shrink-0 text-sm font-semibold text-amber-600">
+                            ★ {spot.rating?.toFixed(1) ?? "-"}
+                          </span>
+                        </div>
+                        <p className="mt-0.5 truncate text-xs text-slate-500">{spot.address}</p>
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
+                            {spot.distanceKm.toFixed(2)}km
+                          </span>
+                          {userLocation && (() => {
+                            const { walkMin, transitMin } = travelTime(spot.distanceKm);
+                            return (
+                              <>
+                                <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-600">
+                                  🚶 {walkMin}분
+                                </span>
+                                <span className="rounded-full bg-violet-50 px-2 py-0.5 text-xs font-semibold text-violet-600">
+                                  🚌 {transitMin}분
+                                </span>
+                              </>
+                            );
+                          })()}
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
+                            {spot.reason}
+                          </span>
+                        </div>
+                      </div>
+                    </button>
+                  ))
+                )}
+              </div>
+
+              {/* 상세 패널: 모바일=바텀시트, 데스크탑=사이드패널 */}
+              {selectedSpotId && (
+                <>
+                  {/* 모바일 딤 오버레이 */}
+                  <div
+                    className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[1px] lg:hidden"
+                    onClick={closeDetail}
+                  />
+
+                  <aside className="
+                    ui-panel animate-slide-up overflow-y-auto
+                    fixed inset-x-0 bottom-0 z-50 max-h-[88dvh] rounded-t-3xl
+                    lg:static lg:inset-auto lg:z-auto lg:max-h-[calc(100vh-220px)] lg:animate-none lg:rounded-2xl
+                  ">
+                    {/* 핸들 + 닫기 (모바일만) */}
+                    <div className="sticky top-0 z-10 flex items-center justify-center rounded-t-3xl bg-white/80 px-4 pb-2 pt-3 backdrop-blur-sm lg:hidden">
+                      <div className="h-1 w-10 rounded-full bg-slate-200" />
+                      <button
+                        className="absolute right-3 flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-500"
+                        onClick={closeDetail}
+                      >
+                        ✕
+                      </button>
+                    </div>
+
+                    {loadingDetail ? (
+                      <p className="p-6 text-sm text-slate-400">상세 정보를 불러오는 중...</p>
+                    ) : detailError ? (
+                      <p className="p-6 text-sm text-rose-600">{detailError}</p>
+                    ) : spotDetail ? (
+                      <>
+                        {/* 대표 사진 */}
+                        {spotDetail.photoUrls[0] ? (
+                          <button
+                            className="relative w-full"
+                            onClick={() => setLightboxIndex(0)}
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={spotDetail.photoUrls[0]}
+                              alt={spotDetail.name}
+                              className="h-48 w-full object-cover lg:rounded-t-2xl"
+                            />
+                            <span className="absolute bottom-2 right-2 flex items-center gap-1 rounded-full bg-black/50 px-2 py-0.5 text-xs text-white">
+                              🔍 클릭해서 확대
+                            </span>
+                          </button>
+                        ) : (
+                          <div className="flex h-28 items-center justify-center bg-slate-100 text-4xl lg:rounded-t-2xl">
+                            {spotDetail.type === "restaurant" ? "🍜" : spotDetail.type === "cafe" ? "☕" : "🏛"}
+                          </div>
+                        )}
+
+                        <div className="p-4 pb-28 lg:pb-4">
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="text-lg font-bold">{spotDetail.name}</p>
+                            <span className="shrink-0 text-sm font-bold text-amber-600">
+                              ★ {spotDetail.rating?.toFixed(1) ?? "-"}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-sm text-slate-500">{spotDetail.address}</p>
+
+                          {spotDetail.phone && (
+                            <a
+                              href={`tel:${spotDetail.phone}`}
+                              className="mt-2 flex items-center gap-1.5 text-sm font-semibold text-teal-600"
+                            >
+                              📞 {spotDetail.phone}
+                            </a>
+                          )}
+
+                          {spotDetail.website && (
+                            <a
+                              href={spotDetail.website}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="mt-1 flex items-center gap-1.5 text-sm font-semibold text-teal-600 underline"
+                            >
+                              🔗 웹사이트
+                            </a>
+                          )}
+
+                          {spotDetail.openingHours.length > 0 && (
+                            <div className="mt-3 rounded-xl border border-white/70 bg-white/70 p-3">
+                              <p className="text-xs font-bold text-slate-400">영업 시간</p>
+                              <ul className="mt-1 grid gap-0.5">
+                                {spotDetail.openingHours.map((line) => (
+                                  <li key={line} className="text-xs text-slate-600">{line}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          {/* 가는 길 */}
+                          <div className="mt-3 rounded-xl border border-white/70 bg-white/70 p-3">
+                            <p className="text-xs font-bold text-slate-400">가는 길</p>
+                            {userLocation && (() => {
+                              const matched = spots.find((s) => s.id === selectedSpotId);
+                              if (!matched) return null;
+                              const { walkMin, transitMin } = travelTime(matched.distanceKm);
+                              return (
+                                <div className="mt-2 flex gap-2">
+                                  <span className="rounded-full bg-blue-100 px-2 py-1 text-xs font-semibold text-blue-700">
+                                    🚶 도보 {walkMin}분
+                                  </span>
+                                  <span className="rounded-full bg-violet-100 px-2 py-1 text-xs font-semibold text-violet-700">
+                                    🚌 대중교통 {transitMin}분
+                                  </span>
+                                </div>
+                              );
+                            })()}
+                            <div className="mt-2 grid grid-cols-2 gap-2">
+                              <a
+                                href={`https://www.google.com/maps/place/?q=place_id:${spotDetail.id}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="flex items-center justify-center gap-1 rounded-xl bg-blue-600 py-2.5 text-xs font-semibold text-white"
+                              >
+                                🗺 구글맵에서 보기
+                              </a>
+                              <a
+                                href={
+                                  userLocation
+                                    ? `https://www.google.com/maps/dir/${userLocation.lat},${userLocation.lng}/${spotDetail.lat},${spotDetail.lng}`
+                                    : `https://www.google.com/maps/dir//${spotDetail.lat},${spotDetail.lng}`
+                                }
+                                target="_blank"
+                                rel="noreferrer"
+                                className="flex items-center justify-center gap-1 rounded-xl bg-slate-900 py-2.5 text-xs font-semibold text-white"
+                              >
+                                🧭 길 안내
+                              </a>
+                            </div>
+                          </div>
+
+                          {/* 추가 사진 */}
+                          {spotDetail.photoUrls.length > 1 && (
+                            <div className="scrollbar-none mt-3 flex gap-2 overflow-x-auto pb-1">
+                              {spotDetail.photoUrls.slice(1).map((url, i) => (
+                                <button
+                                  key={i}
+                                  onClick={() => setLightboxIndex(i + 1)}
+                                  className="shrink-0"
+                                >
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img
+                                    src={url}
+                                    alt={`${spotDetail.name} ${i + 2}`}
+                                    className="h-20 w-20 rounded-xl object-cover transition hover:opacity-80"
+                                  />
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </>
+                    ) : null}
+                  </aside>
+                </>
               )}
-            </aside>
+            </div>
           </div>
-        </section>
+        )}
       </main>
+
+      {/* 모바일 하단 탭바 */}
+      <nav className="fixed bottom-0 left-0 right-0 z-30 border-t border-white/60 bg-slate-50/85 backdrop-blur sm:hidden">
+        <div className="grid grid-cols-3">
+          {([
+            { tab: "home" as Tab, icon: "🏠", label: "홈" },
+            { tab: "phrase" as Tab, icon: "💬", label: "회화" },
+            { tab: "spot" as Tab, icon: "📍", label: "장소" },
+          ]).map(({ tab, icon, label }) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`flex flex-col items-center gap-0.5 py-3 text-xs font-semibold transition ${
+                activeTab === tab ? "text-teal-700" : "text-slate-500"
+              }`}
+            >
+              <span className="text-xl">{icon}</span>
+              {label}
+              {activeTab === tab && (
+                <span className="mt-0.5 h-1 w-4 rounded-full bg-gradient-to-r from-teal-700 to-cyan-700" />
+              )}
+            </button>
+          ))}
+        </div>
+      </nav>
     </div>
   );
 }
