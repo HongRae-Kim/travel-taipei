@@ -1,0 +1,20 @@
+aws_region    = "ap-northeast-2"
+project_name  = "travel-taipei"
+instance_type = "t2.micro"
+
+# AWS EC2 Key Pair 이름 (콘솔에서 미리 생성)
+key_name = "travel-taipei-key"
+
+# SSH 허용 IP: curl ifconfig.me 로 확인 후 /32 붙이기
+my_ip = "x.x.x.x/32"
+
+# RDS 비밀번호 (8자 이상)
+db_password = "your-strong-password"
+
+# API 키
+exchange_api_key    = "your-exchange-api-key"
+openweather_api_key = "your-openweather-api-key"
+google_maps_api_key = "your-google-maps-api-key"
+
+# Vercel 배포 후 확정 (처음엔 임시로 http://localhost:3000 사용)
+allowed_origins = "https://travel-taipei.vercel.app"
