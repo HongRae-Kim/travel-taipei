@@ -21,11 +21,11 @@ docker build -t travel-taipei-backend ./travel-taipei/backend
 
 # ── 환경변수 파일 생성 ────────────────────────────────────
 cat > /home/ec2-user/.env <<EOF
-PGHOST=${db_host}
-PGPORT=${db_port}
-PGDATABASE=${db_name}
-PGUSER=${db_user}
-PGPASSWORD=${db_password}
+PGHOST=${pghost}
+PGPORT=${pgport}
+PGDATABASE=${pgdatabase}
+PGUSER=${pguser}
+PGPASSWORD=${pgpassword}
 REDISHOST=localhost
 REDISPORT=6379
 REDISPASSWORD=

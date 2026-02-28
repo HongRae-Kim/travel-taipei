@@ -21,8 +21,15 @@ variable "my_ip" {
   description = "SSH 허용할 내 IP (예: 1.2.3.4/32)"
 }
 
-variable "db_password" {
-  description = "RDS PostgreSQL 비밀번호"
+# ── Supabase ──────────────────────────────────────────────
+
+variable "supabase_host" {
+  description = "Supabase DB 호스트 (db.xxxx.supabase.co)"
+  sensitive   = true
+}
+
+variable "supabase_password" {
+  description = "Supabase DB 비밀번호"
   sensitive   = true
 }
 
@@ -44,5 +51,5 @@ variable "google_maps_api_key" {
 }
 
 variable "allowed_origins" {
-  description = "CORS 허용 출처 (Vercel 도메인, 예: https://travel-taipei.vercel.app)"
+  description = "CORS 허용 출처 (Vercel 도메인)"
 }
