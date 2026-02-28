@@ -87,8 +87,15 @@ type SavedSpot = {
   photoUrl: string | null;
 };
 
-type ExpenseRecord = {
+type FamilyMember = {
   id: string;
+  name: string;
+  dailyBudgetTwd: number;
+};
+
+type FamilyExpenseRecord = {
+  id: string;
+  memberId: string;
   note: string;
   amountKrw: number;
   amountTwd: number;
@@ -136,8 +143,8 @@ const TAB_ITEMS: Array<{ tab: Tab; icon: string; label: string }> = [
 
 const STORAGE_KEYS = {
   savedSpots: "travelTaipei:savedSpots",
-  budget: "travelTaipei:budget",
-  expenses: "travelTaipei:expenses",
+  familyPlan: "travelTaipei:familyPlan",
+  familyExpenses: "travelTaipei:familyExpenses",
   phrasesPrefix: "travelTaipei:phrases:",
   spotsPrefix: "travelTaipei:spots:",
   spotDetailPrefix: "travelTaipei:spotDetail:",
@@ -154,35 +161,9 @@ const WEEKDAY_KO = [
   "토요일",
 ];
 
-const EMERGENCY_CONTACTS: Array<{ label: string; number: string; description: string }> = [
-  { label: "경찰", number: "110", description: "분실/도난/긴급 신고" },
-  { label: "소방·구급", number: "119", description: "응급상황/구급차" },
-  { label: "관광 핫라인", number: "0800-011-765", description: "24시간 관광 상담" },
-];
-
-const EMERGENCY_PHRASES: Array<{ korean: string; chinese: string }> = [
-  { korean: "도와주세요.", chinese: "請幫幫我。" },
-  { korean: "여권을 잃어버렸어요.", chinese: "我的護照不見了。" },
-  { korean: "가까운 병원이 어디예요?", chinese: "附近的醫院在哪裡？" },
-];
-
-const AIRPORT_GUIDE = [
-  {
-    airport: "타오위안 공항 (TPE)",
-    options: [
-      "공항 MRT: 타이베이 메인역까지 약 35~40분, 편도 약 NT$150",
-      "버스 1819: 타이베이 메인역까지 약 55~70분, 교통상황 영향 큼",
-      "택시: 시내까지 약 40~60분, 대략 NT$1,200~1,600",
-    ],
-  },
-  {
-    airport: "쑹산 공항 (TSA)",
-    options: [
-      "MRT: 도심 접근 가장 빠름, 대부분 20분 내 이동",
-      "택시: 시내 중심지까지 약 15~30분",
-      "버스: 호텔 위치에 따라 환승 1회 기준 이동",
-    ],
-  },
+const DEFAULT_FAMILY_MEMBERS: FamilyMember[] = [
+  { id: "member-self", name: "나", dailyBudgetTwd: 1500 },
+  { id: "member-family", name: "가족", dailyBudgetTwd: 1500 },
 ];
 
 function readStorage<T>(key: string) {
@@ -342,8 +323,12 @@ export default function Home() {
   const lightboxOpenedAt = useRef(0);
   const lightboxImages = spotDetail?.photoUrls ?? [];
   const [savedSpots, setSavedSpots] = useState<SavedSpot[]>([]);
-  const [dailyBudgetTwd, setDailyBudgetTwd] = useState("1500");
-  const [expenses, setExpenses] = useState<ExpenseRecord[]>([]);
+  const [tripDays, setTripDays] = useState("3");
+  const [familyMembers, setFamilyMembers] = useState<FamilyMember[]>(DEFAULT_FAMILY_MEMBERS);
+  const [familyExpenses, setFamilyExpenses] = useState<FamilyExpenseRecord[]>([]);
+  const [newMemberName, setNewMemberName] = useState("");
+  const [newMemberDailyBudgetInput, setNewMemberDailyBudgetInput] = useState("1500");
+  const [selectedExpenseMemberId, setSelectedExpenseMemberId] = useState(DEFAULT_FAMILY_MEMBERS[0].id);
   const [expenseKrwInput, setExpenseKrwInput] = useState("");
   const [expenseNoteInput, setExpenseNoteInput] = useState("");
   const [budgetError, setBudgetError] = useState<string | null>(null);
@@ -363,14 +348,51 @@ export default function Home() {
       setSavedSpots(cachedSavedSpots);
     }
 
-    const cachedBudget = readStorage<{ dailyBudgetTwd: string }>(STORAGE_KEYS.budget);
-    if (cachedBudget?.dailyBudgetTwd) {
-      setDailyBudgetTwd(cachedBudget.dailyBudgetTwd);
+    const cachedFamilyPlan = readStorage<{ tripDays: string; familyMembers: FamilyMember[] }>(
+      STORAGE_KEYS.familyPlan
+    );
+    if (cachedFamilyPlan?.familyMembers?.length) {
+      const normalizedMembers = cachedFamilyPlan.familyMembers
+        .map((member) => ({
+          id: member.id || `${Date.now()}-${Math.random()}`,
+          name: member.name?.trim() || "가족 구성원",
+          dailyBudgetTwd: Number(member.dailyBudgetTwd) > 0 ? Number(member.dailyBudgetTwd) : 0,
+        }))
+        .slice(0, 12);
+      if (normalizedMembers.length > 0) {
+        setFamilyMembers(normalizedMembers);
+        setSelectedExpenseMemberId(normalizedMembers[0].id);
+      }
+      if (cachedFamilyPlan.tripDays) {
+        setTripDays(cachedFamilyPlan.tripDays);
+      }
+    } else {
+      const legacyBudget = readStorage<{ dailyBudgetTwd: string }>("travelTaipei:budget");
+      if (legacyBudget?.dailyBudgetTwd && Number(legacyBudget.dailyBudgetTwd) > 0) {
+        setFamilyMembers((prev) =>
+          prev.map((member) => ({
+            ...member,
+            dailyBudgetTwd: Number(legacyBudget.dailyBudgetTwd),
+          }))
+        );
+      }
     }
 
-    const cachedExpenses = readStorage<ExpenseRecord[]>(STORAGE_KEYS.expenses);
-    if (cachedExpenses) {
-      setExpenses(cachedExpenses);
+    const cachedFamilyExpenses = readStorage<FamilyExpenseRecord[]>(STORAGE_KEYS.familyExpenses);
+    if (cachedFamilyExpenses) {
+      setFamilyExpenses(cachedFamilyExpenses);
+    } else {
+      const legacyExpenses = readStorage<Array<Omit<FamilyExpenseRecord, "memberId">>>(
+        "travelTaipei:expenses"
+      );
+      if (legacyExpenses?.length) {
+        setFamilyExpenses(
+          legacyExpenses.map((expense) => ({
+            ...expense,
+            memberId: DEFAULT_FAMILY_MEMBERS[0].id,
+          }))
+        );
+      }
     }
 
     const updateNetworkState = () => setIsOnline(window.navigator.onLine);
@@ -388,12 +410,19 @@ export default function Home() {
   }, [savedSpots]);
 
   useEffect(() => {
-    writeStorage(STORAGE_KEYS.budget, { dailyBudgetTwd });
-  }, [dailyBudgetTwd]);
+    writeStorage(STORAGE_KEYS.familyPlan, { tripDays, familyMembers });
+  }, [tripDays, familyMembers]);
 
   useEffect(() => {
-    writeStorage(STORAGE_KEYS.expenses, expenses);
-  }, [expenses]);
+    writeStorage(STORAGE_KEYS.familyExpenses, familyExpenses);
+  }, [familyExpenses]);
+
+  useEffect(() => {
+    if (familyMembers.length === 0) return;
+    if (!familyMembers.some((member) => member.id === selectedExpenseMemberId)) {
+      setSelectedExpenseMemberId(familyMembers[0].id);
+    }
+  }, [familyMembers, selectedExpenseMemberId]);
 
   useEffect(() => {
     if (!copiedMessage) return;
@@ -581,7 +610,67 @@ export default function Home() {
     await copyText(payload, "코스");
   }
 
-  function addExpense() {
+  function addFamilyMember() {
+    const name = newMemberName.trim();
+    const dailyBudget = Number(newMemberDailyBudgetInput);
+    if (!name) {
+      setBudgetError("구성원 이름을 입력해주세요.");
+      return;
+    }
+    if (!Number.isFinite(dailyBudget) || dailyBudget <= 0) {
+      setBudgetError("구성원 일일 예산(TWD)을 올바르게 입력해주세요.");
+      return;
+    }
+    setFamilyMembers((prev) => {
+      if (prev.length >= 12) {
+        setBudgetError("가족 구성원은 최대 12명까지 등록할 수 있습니다.");
+        return prev;
+      }
+      const member: FamilyMember = {
+        id: `member-${Date.now()}-${Math.round(Math.random() * 1000)}`,
+        name,
+        dailyBudgetTwd: Math.round(dailyBudget),
+      };
+      setSelectedExpenseMemberId(member.id);
+      return [...prev, member];
+    });
+    setNewMemberName("");
+    setNewMemberDailyBudgetInput("1500");
+    setBudgetError(null);
+  }
+
+  function updateFamilyMemberBudget(memberId: string, rawBudget: string) {
+    const nextBudget = Number(rawBudget);
+    setFamilyMembers((prev) =>
+      prev.map((member) =>
+        member.id === memberId
+          ? { ...member, dailyBudgetTwd: Number.isFinite(nextBudget) && nextBudget > 0 ? Math.round(nextBudget) : 0 }
+          : member
+      )
+    );
+  }
+
+  function removeFamilyMember(memberId: string) {
+    setFamilyMembers((prev) => {
+      if (prev.length <= 1) {
+        setBudgetError("최소 1명의 구성원은 필요합니다.");
+        return prev;
+      }
+      const filtered = prev.filter((member) => member.id !== memberId);
+      if (selectedExpenseMemberId === memberId) {
+        setSelectedExpenseMemberId(filtered[0]?.id ?? "");
+      }
+      setFamilyExpenses((expenses) => expenses.filter((expense) => expense.memberId !== memberId));
+      setBudgetError(null);
+      return filtered;
+    });
+  }
+
+  function addFamilyExpense() {
+    if (!selectedExpenseMemberId || !familyMembers.some((member) => member.id === selectedExpenseMemberId)) {
+      setBudgetError("지출을 기록할 가족 구성원을 먼저 선택해주세요.");
+      return;
+    }
     const amountKrw = Number(expenseKrwInput);
     if (!Number.isFinite(amountKrw) || amountKrw <= 0) {
       setBudgetError("지출 금액(원)을 올바르게 입력해주세요.");
@@ -590,9 +679,10 @@ export default function Home() {
     const baseRate = exchange?.baseRate && exchange.baseRate > 0 ? exchange.baseRate : 42;
     const amountTwd = Number((amountKrw / baseRate).toFixed(2));
 
-    setExpenses((prev) => [
+    setFamilyExpenses((prev) => [
       {
-        id: `${Date.now()}`,
+        id: `expense-${Date.now()}-${Math.round(Math.random() * 1000)}`,
+        memberId: selectedExpenseMemberId,
         note: expenseNoteInput.trim() || "기타 지출",
         amountKrw,
         amountTwd,
@@ -605,12 +695,12 @@ export default function Home() {
     setBudgetError(null);
   }
 
-  function removeExpense(expenseId: string) {
-    setExpenses((prev) => prev.filter((item) => item.id !== expenseId));
+  function removeFamilyExpense(expenseId: string) {
+    setFamilyExpenses((prev) => prev.filter((item) => item.id !== expenseId));
   }
 
-  function clearExpenses() {
-    setExpenses([]);
+  function clearFamilyExpenses() {
+    setFamilyExpenses([]);
     setBudgetError(null);
   }
 
@@ -790,18 +880,39 @@ export default function Home() {
     return { walkMin, transitMin };
   }, [optimizedRoute.legDistances]);
 
-  const budgetSummary = useMemo(() => {
-    const budget = Number(dailyBudgetTwd) || 0;
-    const spentTwd = expenses.reduce((sum, expense) => sum + expense.amountTwd, 0);
-    const spentKrw = expenses.reduce((sum, expense) => sum + expense.amountKrw, 0);
-    const remainTwd = Number((budget - spentTwd).toFixed(2));
+  const familyBudgetSummary = useMemo(() => {
+    const days = Math.max(1, Number.parseInt(tripDays, 10) || 1);
+    const totalDailyBudget = familyMembers.reduce((sum, member) => sum + member.dailyBudgetTwd, 0);
+    const totalTripBudget = totalDailyBudget * days;
+    const spentTwd = familyExpenses.reduce((sum, expense) => sum + expense.amountTwd, 0);
+    const spentKrw = familyExpenses.reduce((sum, expense) => sum + expense.amountKrw, 0);
+    const remainTwd = Number((totalTripBudget - spentTwd).toFixed(2));
+    const estimatedSpotCost = savedSpots.reduce((sum, spot) => {
+      if (spot.type === "restaurant") return sum + 260;
+      if (spot.type === "cafe") return sum + 160;
+      return sum + 120;
+    }, 0) * days;
     return {
-      budget,
+      days,
+      totalDailyBudget,
+      totalTripBudget,
       spentTwd: Number(spentTwd.toFixed(2)),
       spentKrw: Math.round(spentKrw),
       remainTwd,
+      estimatedSpotCost,
     };
-  }, [dailyBudgetTwd, expenses]);
+  }, [tripDays, familyMembers, familyExpenses, savedSpots]);
+
+  const memberExpenseSummary = useMemo(() => {
+    const map = new Map<string, { spentTwd: number; spentKrw: number }>();
+    for (const expense of familyExpenses) {
+      const current = map.get(expense.memberId) ?? { spentTwd: 0, spentKrw: 0 };
+      current.spentTwd += expense.amountTwd;
+      current.spentKrw += expense.amountKrw;
+      map.set(expense.memberId, current);
+    }
+    return map;
+  }, [familyExpenses]);
 
   const todayOpeningInfo = useMemo(
     () => (spotDetail ? getTodayOpeningInfo(spotDetail.openingHours) : null),
@@ -1081,162 +1192,6 @@ export default function Home() {
               )}
             </section>
 
-            {/* 예산 트래커 */}
-            <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
-              <div className="flex items-center justify-between">
-                <h2 className="font-bold text-slate-700">여행 예산 트래커</h2>
-                <button
-                  onClick={clearExpenses}
-                  className="text-xs font-semibold text-slate-400 underline"
-                >
-                  지출 초기화
-                </button>
-              </div>
-
-              <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs sm:text-sm">
-                <div className="rounded-xl bg-slate-100 px-2 py-2.5">
-                  <p className="text-slate-500">일 예산</p>
-                  <p className="mt-0.5 font-bold text-slate-800">{budgetSummary.budget.toLocaleString()} TWD</p>
-                </div>
-                <div className="rounded-xl bg-rose-50 px-2 py-2.5">
-                  <p className="text-rose-500">사용</p>
-                  <p className="mt-0.5 font-bold text-rose-700">{budgetSummary.spentTwd.toLocaleString()} TWD</p>
-                </div>
-                <div className={`rounded-xl px-2 py-2.5 ${budgetSummary.remainTwd >= 0 ? "bg-emerald-50" : "bg-amber-50"}`}>
-                  <p className={`${budgetSummary.remainTwd >= 0 ? "text-emerald-600" : "text-amber-600"}`}>잔여</p>
-                  <p className={`mt-0.5 font-bold ${budgetSummary.remainTwd >= 0 ? "text-emerald-700" : "text-amber-700"}`}>
-                    {budgetSummary.remainTwd.toLocaleString()} TWD
-                  </p>
-                </div>
-              </div>
-
-              <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  min={0}
-                  value={dailyBudgetTwd}
-                  onChange={(e) => setDailyBudgetTwd(e.target.value)}
-                  className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
-                  placeholder="일 예산 (TWD)"
-                />
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  min={0}
-                  value={expenseKrwInput}
-                  onChange={(e) => setExpenseKrwInput(e.target.value)}
-                  className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
-                  placeholder="지출 금액 (KRW)"
-                />
-                <button
-                  onClick={addExpense}
-                  className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
-                >
-                  추가
-                </button>
-              </div>
-
-              <input
-                type="text"
-                value={expenseNoteInput}
-                onChange={(e) => setExpenseNoteInput(e.target.value)}
-                className="mt-2 w-full rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
-                placeholder="지출 메모 (예: 야시장 저녁)"
-              />
-
-              {budgetError && (
-                <p className="mt-2 text-sm font-semibold text-rose-600">{budgetError}</p>
-              )}
-
-              <div className="mt-3 grid gap-2">
-                {expenses.length === 0 ? (
-                  <p className="text-sm text-slate-400">아직 기록된 지출이 없습니다.</p>
-                ) : (
-                  expenses.slice(0, 6).map((expense) => (
-                    <div
-                      key={expense.id}
-                      className="flex items-center justify-between rounded-xl border border-white/70 bg-white/70 px-3 py-2"
-                    >
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-slate-700">{expense.note}</p>
-                        <p className="text-xs text-slate-400">
-                          {new Date(expense.createdAt).toLocaleString("ko-KR", {
-                            month: "numeric",
-                            day: "numeric",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
-                        </p>
-                      </div>
-                      <div className="ml-3 text-right">
-                        <p className="text-sm font-bold text-slate-800">{expense.amountTwd.toLocaleString()} TWD</p>
-                        <p className="text-xs text-slate-400">{expense.amountKrw.toLocaleString()} 원</p>
-                        <button
-                          onClick={() => removeExpense(expense.id)}
-                          className="text-[11px] font-semibold text-slate-400 underline"
-                        >
-                          삭제
-                        </button>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </section>
-
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              {/* 긴급/안전 카드 */}
-              <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
-                <h2 className="font-bold text-slate-700">긴급 연락 · 안전 카드</h2>
-                <div className="mt-3 grid gap-2">
-                  {EMERGENCY_CONTACTS.map((contact) => (
-                    <a
-                      key={contact.label}
-                      href={`tel:${contact.number}`}
-                      className="flex items-center justify-between rounded-xl border border-white/70 bg-white/75 px-3 py-2"
-                    >
-                      <div>
-                        <p className="text-sm font-bold text-slate-700">{contact.label}</p>
-                        <p className="text-xs text-slate-500">{contact.description}</p>
-                      </div>
-                      <span className="text-sm font-black text-teal-700">{contact.number}</span>
-                    </a>
-                  ))}
-                </div>
-                <div className="mt-3 grid gap-2">
-                  {EMERGENCY_PHRASES.map((phrase) => (
-                    <div key={phrase.korean} className="rounded-xl border border-white/70 bg-white/70 px-3 py-2">
-                      <p className="text-xs text-slate-500">{phrase.korean}</p>
-                      <p className="mt-0.5 text-sm font-bold text-slate-800">{phrase.chinese}</p>
-                      <button
-                        onClick={() => void copyText(phrase.chinese, "긴급 문장")}
-                        className="mt-1 text-xs font-semibold text-teal-700 underline"
-                      >
-                        중국어 문장 복사
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </section>
-
-              {/* 공항 이동 가이드 */}
-              <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
-                <h2 className="font-bold text-slate-700">공항 ↔ 시내 이동 가이드</h2>
-                <div className="mt-3 grid gap-3">
-                  {AIRPORT_GUIDE.map((item) => (
-                    <div key={item.airport} className="rounded-xl border border-white/70 bg-white/75 px-3 py-2.5">
-                      <p className="text-sm font-black text-slate-800">{item.airport}</p>
-                      <ul className="mt-1.5 grid gap-1">
-                        {item.options.map((option) => (
-                          <li key={option} className="text-xs text-slate-600">• {option}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            </div>
           </div>
         )}
 
@@ -1436,6 +1391,207 @@ export default function Home() {
                 >
                   저장 코스 공유
                 </button>
+              </div>
+            </section>
+
+            <section className="ui-panel ui-appear rounded-2xl p-4">
+              <div className="flex items-center justify-between">
+                <h2 className="font-bold text-slate-800">가족 예산 트래커 · 일정 연동</h2>
+                <button
+                  onClick={clearFamilyExpenses}
+                  className="text-xs font-semibold text-slate-400 underline"
+                >
+                  지출 전체 초기화
+                </button>
+              </div>
+              <p className="mt-1 text-xs text-slate-500">
+                여행 일수와 가족 구성원을 기준으로 일정표 예산을 계산합니다.
+              </p>
+
+              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <div className="rounded-xl bg-slate-100 px-3 py-2 text-center">
+                  <p className="text-xs text-slate-500">구성원</p>
+                  <p className="text-base font-black text-slate-800">{familyMembers.length}명</p>
+                </div>
+                <div className="rounded-xl bg-slate-100 px-3 py-2 text-center">
+                  <p className="text-xs text-slate-500">여행 일수</p>
+                  <p className="text-base font-black text-slate-800">{familyBudgetSummary.days}일</p>
+                </div>
+                <div className="rounded-xl bg-blue-50 px-3 py-2 text-center">
+                  <p className="text-xs text-blue-600">총 예산</p>
+                  <p className="text-base font-black text-blue-700">
+                    {Math.round(familyBudgetSummary.totalTripBudget).toLocaleString()} TWD
+                  </p>
+                </div>
+                <div className={`rounded-xl px-3 py-2 text-center ${familyBudgetSummary.remainTwd >= 0 ? "bg-emerald-50" : "bg-amber-50"}`}>
+                  <p className={`text-xs ${familyBudgetSummary.remainTwd >= 0 ? "text-emerald-600" : "text-amber-600"}`}>잔액</p>
+                  <p className={`text-base font-black ${familyBudgetSummary.remainTwd >= 0 ? "text-emerald-700" : "text-amber-700"}`}>
+                    {Math.round(familyBudgetSummary.remainTwd).toLocaleString()} TWD
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div className="rounded-xl border border-white/70 bg-white/70 px-3 py-2">
+                  <p className="text-xs text-slate-500">총 사용액</p>
+                  <p className="text-sm font-bold text-slate-700">
+                    {familyBudgetSummary.spentTwd.toLocaleString()} TWD
+                    <span className="ml-1 text-xs text-slate-400">
+                      ({familyBudgetSummary.spentKrw.toLocaleString()}원)
+                    </span>
+                  </p>
+                </div>
+                <div className="rounded-xl border border-white/70 bg-white/70 px-3 py-2">
+                  <p className="text-xs text-slate-500">저장 일정 예상비용</p>
+                  <p className="text-sm font-bold text-slate-700">
+                    약 {Math.round(familyBudgetSummary.estimatedSpotCost).toLocaleString()} TWD
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-3 grid gap-2 sm:grid-cols-[130px_1fr_140px_auto]">
+                <input
+                  type="number"
+                  min={1}
+                  max={30}
+                  value={tripDays}
+                  onChange={(e) => setTripDays(e.target.value)}
+                  className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
+                  placeholder="여행일수"
+                />
+                <input
+                  type="text"
+                  value={newMemberName}
+                  onChange={(e) => setNewMemberName(e.target.value)}
+                  className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
+                  placeholder="구성원 이름"
+                />
+                <input
+                  type="number"
+                  min={1}
+                  value={newMemberDailyBudgetInput}
+                  onChange={(e) => setNewMemberDailyBudgetInput(e.target.value)}
+                  className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
+                  placeholder="일일예산(TWD)"
+                />
+                <button
+                  onClick={addFamilyMember}
+                  className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                >
+                  구성원 추가
+                </button>
+              </div>
+
+              <div className="mt-3 grid gap-2">
+                {familyMembers.map((member) => {
+                  const spent = memberExpenseSummary.get(member.id) ?? { spentTwd: 0, spentKrw: 0 };
+                  const memberTripBudget = member.dailyBudgetTwd * familyBudgetSummary.days;
+                  const memberRemain = memberTripBudget - spent.spentTwd;
+                  return (
+                    <div
+                      key={member.id}
+                      className="grid items-center gap-2 rounded-xl border border-white/70 bg-white/70 px-3 py-2 sm:grid-cols-[110px_140px_1fr_auto]"
+                    >
+                      <p className="truncate text-sm font-bold text-slate-800">{member.name}</p>
+                      <input
+                        type="number"
+                        min={1}
+                        value={member.dailyBudgetTwd}
+                        onChange={(e) => updateFamilyMemberBudget(member.id, e.target.value)}
+                        className="rounded-lg border border-white/70 bg-white px-2 py-1 text-sm outline-none ring-teal-400/40 focus:ring"
+                      />
+                      <p className="text-xs text-slate-600">
+                        예산 {Math.round(memberTripBudget).toLocaleString()} TWD · 사용 {Math.round(spent.spentTwd).toLocaleString()} TWD · 잔액 {Math.round(memberRemain).toLocaleString()} TWD
+                      </p>
+                      <button
+                        onClick={() => removeFamilyMember(member.id)}
+                        className="text-xs font-semibold text-slate-400 underline"
+                      >
+                        구성원 삭제
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="mt-3 grid gap-2 sm:grid-cols-[150px_150px_1fr_auto]">
+                <select
+                  value={selectedExpenseMemberId}
+                  onChange={(e) => setSelectedExpenseMemberId(e.target.value)}
+                  className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
+                >
+                  {familyMembers.map((member) => (
+                    <option key={member.id} value={member.id}>
+                      {member.name}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min={0}
+                  value={expenseKrwInput}
+                  onChange={(e) => setExpenseKrwInput(e.target.value)}
+                  className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
+                  placeholder="지출 금액 (KRW)"
+                />
+                <input
+                  type="text"
+                  value={expenseNoteInput}
+                  onChange={(e) => setExpenseNoteInput(e.target.value)}
+                  className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm outline-none ring-teal-400/40 focus:ring"
+                  placeholder="지출 메모 (예: 가족 점심)"
+                />
+                <button
+                  onClick={addFamilyExpense}
+                  className="rounded-xl bg-gradient-to-r from-teal-700 to-cyan-700 px-3 py-2 text-sm font-semibold text-white"
+                >
+                  지출 추가
+                </button>
+              </div>
+
+              {budgetError && (
+                <p className="mt-2 text-sm font-semibold text-rose-600">{budgetError}</p>
+              )}
+
+              <div className="mt-3 grid gap-2">
+                {familyExpenses.length === 0 ? (
+                  <p className="text-sm text-slate-400">아직 기록된 가족 지출이 없습니다.</p>
+                ) : (
+                  familyExpenses.slice(0, 8).map((expense) => {
+                    const memberName = familyMembers.find((member) => member.id === expense.memberId)?.name ?? "구성원";
+                    return (
+                      <div
+                        key={expense.id}
+                        className="flex items-center justify-between rounded-xl border border-white/70 bg-white/70 px-3 py-2"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-slate-700">
+                            [{memberName}] {expense.note}
+                          </p>
+                          <p className="text-xs text-slate-400">
+                            {new Date(expense.createdAt).toLocaleString("ko-KR", {
+                              month: "numeric",
+                              day: "numeric",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </p>
+                        </div>
+                        <div className="ml-3 text-right">
+                          <p className="text-sm font-bold text-slate-800">{expense.amountTwd.toLocaleString()} TWD</p>
+                          <p className="text-xs text-slate-400">{expense.amountKrw.toLocaleString()} 원</p>
+                          <button
+                            onClick={() => removeFamilyExpense(expense.id)}
+                            className="text-[11px] font-semibold text-slate-400 underline"
+                          >
+                            삭제
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
               </div>
             </section>
 
@@ -1783,7 +1939,7 @@ export default function Home() {
                                 </div>
                               );
                             })()}
-                            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
                               <a
                                 href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
                                   `${spotDetail.lat},${spotDetail.lng}`
@@ -1806,23 +1962,7 @@ export default function Home() {
                                 }
                                 className="flex items-center justify-center gap-1 rounded-xl bg-slate-900 py-2.5 text-xs font-semibold text-white"
                               >
-                                🧭 자동차 길안내
-                              </a>
-                              <a
-                                href={
-                                  userLocation
-                                    ? `https://www.google.com/maps/dir/?api=1&travelmode=transit&origin=${encodeURIComponent(
-                                        `${userLocation.lat},${userLocation.lng}`
-                                      )}&destination=${encodeURIComponent(
-                                        `${spotDetail.lat},${spotDetail.lng}`
-                                      )}&destination_place_id=${encodeURIComponent(spotDetail.id)}`
-                                    : `https://www.google.com/maps/dir/?api=1&travelmode=transit&destination=${encodeURIComponent(
-                                        `${spotDetail.lat},${spotDetail.lng}`
-                                      )}&destination_place_id=${encodeURIComponent(spotDetail.id)}`
-                                }
-                                className="flex items-center justify-center gap-1 rounded-xl bg-violet-700 py-2.5 text-xs font-semibold text-white"
-                              >
-                                🚇 대중교통
+                                🧭 길 안내
                               </a>
                             </div>
                           </div>
