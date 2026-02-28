@@ -1294,7 +1294,7 @@ export default function Home() {
           <img
             src={lightboxImages[lightboxIndex]}
             alt="확대 이미지"
-            className="no-touch-menu max-h-[90dvh] max-w-[80vw] select-none rounded-2xl object-contain shadow-2xl"
+            className="no-touch-menu max-h-[90dvh] max-w-[94vw] select-none rounded-2xl object-contain shadow-2xl sm:max-w-[80vw]"
             onClick={(e) => e.stopPropagation()}
             onContextMenu={(e) => e.preventDefault()}
             draggable={false}
@@ -1340,7 +1340,7 @@ export default function Home() {
 
       {/* 헤더 */}
       <header className="ui-header safe-top-inset sticky top-0 z-30">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
+        <div className="mx-auto flex max-w-5xl items-center justify-between px-3 py-2.5 sm:px-4 sm:py-3">
           <div className="flex items-center gap-2">
             <span className="text-xl">🇹🇼</span>
             <span className="bg-gradient-to-r from-teal-800 to-cyan-800 bg-clip-text text-base font-black tracking-tight text-transparent">
@@ -1363,7 +1363,7 @@ export default function Home() {
       </header>
 
       {/* 콘텐츠 */}
-      <main className="mx-auto max-w-5xl px-4 pb-[calc(7rem+env(safe-area-inset-bottom))] pt-4 sm:pb-10 sm:pt-6">
+      <main className="mx-auto max-w-5xl px-3 pb-[calc(8rem+env(safe-area-inset-bottom))] pt-3 sm:px-4 sm:pb-10 sm:pt-6">
         {!isOnline && (
           <div className="ui-panel mb-4 rounded-2xl border-amber-300/70 bg-amber-50/90 px-4 py-3 text-sm text-amber-800">
             현재 오프라인 상태입니다. 저장된 캐시 데이터를 우선 보여줍니다.
@@ -1377,7 +1377,7 @@ export default function Home() {
 
         {/* ── 홈 탭 ── */}
         {activeTab === "home" && (
-          <div className="grid grid-cols-1 gap-4">
+          <div className="grid grid-cols-1 gap-3 sm:gap-4">
             <section className="ui-hero ui-appear rounded-3xl p-4 text-white sm:p-6">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/75">
                 Live Travel Snapshot
@@ -1548,7 +1548,7 @@ export default function Home() {
 
         {/* ── 회화 탭 ── */}
         {activeTab === "phrase" && (
-          <div className="grid grid-cols-1 gap-4">
+          <div className="grid grid-cols-1 gap-3 sm:gap-4">
             {/* 카테고리 칩 */}
             <div className="flex flex-wrap gap-2">
               {PHRASE_CATEGORIES.map((cat) => (
@@ -1588,7 +1588,7 @@ export default function Home() {
 
         {/* ── 번역 탭 ── */}
         {activeTab === "translate" && (
-          <div className="grid grid-cols-1 gap-4">
+          <div className="grid grid-cols-1 gap-3 sm:gap-4">
             <section className="ui-hero ui-appear rounded-3xl p-4 text-white sm:p-6">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/75">
                 Korean → Traditional Chinese
@@ -1676,7 +1676,7 @@ export default function Home() {
 
         {/* ── 예산 탭 ── */}
         {activeTab === "budget" && (
-          <div className="grid grid-cols-1 gap-4">
+          <div className="grid grid-cols-1 gap-3 sm:gap-4">
             <section className="ui-hero ui-appear rounded-3xl p-4 text-white sm:p-6">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/75">
                 Family Budget Planner
@@ -1707,7 +1707,7 @@ export default function Home() {
             </div>
 
             <section className={`${budgetSectionClass("overview")} ui-panel ui-appear rounded-2xl p-4 sm:p-5`}>
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <h2 className="font-bold text-slate-800">예산 요약</h2>
                 <button
                   onClick={clearFamilyExpenses}
@@ -1852,7 +1852,7 @@ export default function Home() {
             </section>
 
             <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <h3 className="font-bold text-slate-800">여행 일정표 · 시간/장소/비용</h3>
                 <button
                   onClick={loadDefaultItineraryPlan}
@@ -1975,10 +1975,10 @@ export default function Home() {
                     key={`itinerary-day-${dayPlan.day}`}
                     className="rounded-xl border border-white/70 bg-white/75 px-3 py-3"
                   >
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-col items-start gap-1 sm:flex-row sm:items-center sm:justify-between">
                       <p className="text-sm font-bold text-slate-800">Day {dayPlan.day}</p>
                       <p
-                        className={`text-xs font-semibold ${
+                        className={`text-left text-xs font-semibold sm:text-right ${
                           dayPlan.remainTwd >= 0 ? "text-emerald-600" : "text-rose-600"
                         }`}
                       >
@@ -2172,7 +2172,7 @@ export default function Home() {
                     return (
                       <div
                         key={expense.id}
-                        className="flex items-center justify-between rounded-xl border border-white/70 bg-white/75 px-3 py-2"
+                        className="flex flex-col items-start gap-2 rounded-xl border border-white/70 bg-white/75 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
                       >
                         <div className="min-w-0">
                           <p className="truncate text-sm font-semibold text-slate-700">
@@ -2188,7 +2188,7 @@ export default function Home() {
                             })}
                           </p>
                         </div>
-                        <div className="ml-3 text-right">
+                        <div className="text-left sm:ml-3 sm:text-right">
                           <p className="text-sm font-bold text-slate-800">{expense.amountTwd.toLocaleString()} TWD</p>
                           <p className="text-xs text-slate-400">{expense.amountKrw.toLocaleString()} 원</p>
                           <button
@@ -2273,7 +2273,7 @@ export default function Home() {
 
         {/* ── 장소 탭 ── */}
         {activeTab === "spot" && (
-          <div className="grid grid-cols-1 gap-4">
+          <div className="grid grid-cols-1 gap-3 sm:gap-4">
             {/* 필터 바 */}
             <div className="ui-panel ui-appear rounded-2xl p-4">
               <div className="scrollbar-none flex gap-2 overflow-x-auto pb-0.5">
@@ -2464,7 +2464,7 @@ export default function Home() {
                     style={{ transform: sheetDragY > 0 ? `translateY(${sheetDragY}px)` : undefined }}
                     className="
                     ui-panel animate-slide-up overflow-y-auto
-                    fixed inset-x-0 bottom-0 z-50 max-h-[88dvh] rounded-t-3xl
+                    fixed inset-x-0 bottom-0 z-50 max-h-[92dvh] rounded-t-3xl
                     transition-transform duration-200 ease-out
                     lg:static lg:inset-auto lg:z-auto lg:max-h-[calc(100vh-220px)] lg:animate-none lg:rounded-2xl lg:transition-none
                   "
@@ -2671,7 +2671,7 @@ export default function Home() {
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              className={`flex flex-col items-center gap-0.5 py-3 text-xs font-semibold transition ${
+              className={`flex flex-col items-center gap-0.5 py-2.5 text-xs font-semibold transition ${
                 activeTab === tab ? "text-teal-700" : "text-slate-500"
               }`}
             >
