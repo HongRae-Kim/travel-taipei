@@ -1,11 +1,15 @@
 package com.travel.taipei.weather.application;
 
 import com.travel.taipei.weather.infrastructure.WeatherApiClient;
+import com.travel.taipei.weather.interfaces.dto.WeatherForecastItem;
 import com.travel.taipei.weather.interfaces.dto.WeatherResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.cache.Cache;
 import org.springframework.cache.CacheManager;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
+
+import java.util.List;
 
 @Service
 @RequiredArgsConstructor
@@ -37,6 +41,11 @@ public class WeatherService {
             }
             throw e;
         }
+    }
+
+    @Cacheable(value = "weather-forecast", key = "'taipei'")
+    public List<WeatherForecastItem> getForecast() {
+        return weatherApiClient.fetchTaipeiForecast();
     }
 
     private <T> T getCached(Cache cache, String key, Class<T> targetType) {
