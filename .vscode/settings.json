@@ -1,0 +1,7 @@
+{
+  "java.saveActions.organizeImports": true,
+  "editor.codeActionsOnSave": {
+    "source.organizeImports": "explicit"
+  },
+  "java.compile.nullAnalysis.mode": "automatic"
+}

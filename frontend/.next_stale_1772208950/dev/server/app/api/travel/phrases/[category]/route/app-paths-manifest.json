@@ -1,0 +1,3 @@
+{
+  "/api/travel/phrases/[category]/route": "app/api/travel/phrases/[category]/route.js"
+}
