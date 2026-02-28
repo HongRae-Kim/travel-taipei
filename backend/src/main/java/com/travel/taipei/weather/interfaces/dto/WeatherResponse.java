@@ -6,6 +6,6 @@ public record WeatherResponse(
         double feelsLike,
         int humidity,
         String description,
-        String icon,
+        String iconUrl,
         double windSpeed
 ) {}
