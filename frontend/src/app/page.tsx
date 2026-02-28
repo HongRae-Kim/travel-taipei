@@ -421,6 +421,35 @@ function getTodayOpeningInfo(openingHours: string[]) {
   return { status: "영업 정보", detail: line };
 }
 
+function toSpeechLangCode(lang: TranslateLanguage) {
+  return lang === "ko" ? "ko-KR" : "zh-TW";
+}
+
+function pickSpeechVoice(voices: SpeechSynthesisVoice[], lang: TranslateLanguage) {
+  if (voices.length === 0) return null;
+  const normalized = voices.map((voice) => ({
+    voice,
+    lang: voice.lang.toLowerCase(),
+    name: voice.name.toLowerCase(),
+  }));
+
+  if (lang === "ko") {
+    return (
+      normalized.find((item) => item.lang === "ko-kr")?.voice ??
+      normalized.find((item) => item.lang.startsWith("ko"))?.voice ??
+      null
+    );
+  }
+
+  return (
+    normalized.find((item) => item.lang === "zh-tw")?.voice ??
+    normalized.find((item) => item.lang.includes("hant"))?.voice ??
+    normalized.find((item) => item.name.includes("taiwan"))?.voice ??
+    normalized.find((item) => item.lang.startsWith("zh"))?.voice ??
+    null
+  );
+}
+
 function travelTime(distanceKm: number) {
   const walkMin = Math.max(1, Math.round((distanceKm / 4.5) * 60));
   const transitMin = Math.max(5, Math.round((distanceKm / 22) * 60));
@@ -468,6 +497,9 @@ export default function Home() {
   const [translateHistory, setTranslateHistory] = useState<TranslationHistoryItem[]>([]);
   const [loadingTranslate, setLoadingTranslate] = useState(false);
   const [translateError, setTranslateError] = useState<string | null>(null);
+  const [ttsSupported, setTtsSupported] = useState(false);
+  const [ttsError, setTtsError] = useState<string | null>(null);
+  const [speakingTarget, setSpeakingTarget] = useState<"source" | "translated" | null>(null);
   const [isOnline, setIsOnline] = useState(true);
   const [copiedMessage, setCopiedMessage] = useState<string | null>(null);
 
@@ -511,6 +543,7 @@ export default function Home() {
   const [expenseKrwInput, setExpenseKrwInput] = useState("");
   const [expenseNoteInput, setExpenseNoteInput] = useState("");
   const [budgetError, setBudgetError] = useState<string | null>(null);
+  const speechVoicesRef = useRef<SpeechSynthesisVoice[]>([]);
   const activeTranslateMeta = TRANSLATE_DIRECTION_META[translateDirection];
   const quickTranslateSamples = QUICK_TRANSLATE_SAMPLES[translateDirection];
 
@@ -718,6 +751,33 @@ export default function Home() {
   }, [copiedMessage]);
 
   useEffect(() => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      setTtsSupported(false);
+      return;
+    }
+    const synthesis = window.speechSynthesis;
+    setTtsSupported(true);
+    const updateVoices = () => {
+      speechVoicesRef.current = synthesis.getVoices();
+    };
+    updateVoices();
+    synthesis.addEventListener("voiceschanged", updateVoices);
+    return () => {
+      synthesis.removeEventListener("voiceschanged", updateVoices);
+      synthesis.cancel();
+      setSpeakingTarget(null);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === "translate") return;
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+    setSpeakingTarget(null);
+  }, [activeTab]);
+
+  useEffect(() => {
     if (lightboxIndex === null) return;
     const len = lightboxImages.length;
     function handleKey(e: KeyboardEvent) {
@@ -866,8 +926,10 @@ export default function Home() {
   function reverseTranslateDirection() {
     const nextDirection: TranslateDirection =
       translateDirection === "ko_to_zhTW" ? "zhTW_to_ko" : "ko_to_zhTW";
+    stopSpeaking();
     setTranslateDirection(nextDirection);
     setTranslateError(null);
+    setTtsError(null);
     if (translatedText.trim()) {
       setTranslateInput(translatedText);
       setTranslatedText("");
@@ -875,19 +937,71 @@ export default function Home() {
   }
 
   function clearTranslateFields() {
+    stopSpeaking();
     setTranslateInput("");
     setTranslatedText("");
     setTranslateError(null);
+    setTtsError(null);
   }
 
   function applyTranslateHistory(item: TranslationHistoryItem) {
     if (!isSupportedTranslateLang(item.sourceLang) || !isSupportedTranslateLang(item.targetLang)) return;
     const nextDirection: TranslateDirection =
       item.sourceLang === "ko" && item.targetLang === "zh-TW" ? "ko_to_zhTW" : "zhTW_to_ko";
+    stopSpeaking();
     setTranslateDirection(nextDirection);
     setTranslateInput(item.sourceText);
     setTranslatedText(item.translatedText);
     setTranslateError(null);
+    setTtsError(null);
+  }
+
+  function stopSpeaking() {
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+    setSpeakingTarget(null);
+  }
+
+  function speakText(text: string, lang: TranslateLanguage, target: "source" | "translated") {
+    const trimmedText = text.trim();
+    if (!trimmedText) {
+      setTtsError("음성으로 들을 문장이 없습니다.");
+      return;
+    }
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      setTtsSupported(false);
+      setTtsError("이 브라우저는 음성 읽기를 지원하지 않습니다.");
+      return;
+    }
+
+    const synthesis = window.speechSynthesis;
+    const utterance = new SpeechSynthesisUtterance(trimmedText);
+    const voices = speechVoicesRef.current.length > 0 ? speechVoicesRef.current : synthesis.getVoices();
+    const voice = pickSpeechVoice(voices, lang);
+    utterance.lang = toSpeechLangCode(lang);
+    if (voice) utterance.voice = voice;
+    utterance.rate = lang === "ko" ? 1 : 0.95;
+    utterance.pitch = 1;
+    utterance.onstart = () => {
+      setTtsError(null);
+      setSpeakingTarget(target);
+    };
+    utterance.onend = () => {
+      setSpeakingTarget((prev) => (prev === target ? null : prev));
+    };
+    utterance.onerror = () => {
+      setSpeakingTarget(null);
+      setTtsError("음성 재생에 실패했습니다. 다시 시도해주세요.");
+    };
+
+    try {
+      synthesis.cancel();
+      synthesis.speak(utterance);
+    } catch {
+      setSpeakingTarget(null);
+      setTtsError("음성 재생에 실패했습니다. 다시 시도해주세요.");
+    }
   }
 
   async function copyText(text: string, label: string) {
@@ -1757,7 +1871,11 @@ export default function Home() {
 
               <div className="mt-3 flex flex-wrap gap-2">
                 <button
-                  onClick={() => setTranslateDirection("ko_to_zhTW")}
+                  onClick={() => {
+                    stopSpeaking();
+                    setTranslateDirection("ko_to_zhTW");
+                    setTtsError(null);
+                  }}
                   className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
                     translateDirection === "ko_to_zhTW"
                       ? "bg-white text-teal-800"
@@ -1767,7 +1885,11 @@ export default function Home() {
                   한국어 → 대만어
                 </button>
                 <button
-                  onClick={() => setTranslateDirection("zhTW_to_ko")}
+                  onClick={() => {
+                    stopSpeaking();
+                    setTranslateDirection("zhTW_to_ko");
+                    setTtsError(null);
+                  }}
                   className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
                     translateDirection === "zhTW_to_ko"
                       ? "bg-white text-teal-800"
@@ -1783,6 +1905,11 @@ export default function Home() {
                   ↔ 방향 전환
                 </button>
               </div>
+              <p className="mt-2 text-[11px] text-white/85">
+                {ttsSupported
+                  ? "🔊 음성듣기 지원 브라우저입니다."
+                  : "🔇 이 브라우저에서는 음성듣기(TTS)를 지원하지 않을 수 있습니다."}
+              </p>
             </section>
 
             <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
@@ -1815,13 +1942,20 @@ export default function Home() {
                 ))}
               </div>
 
-              <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-4">
                 <button
                   onClick={() => void translateText()}
                   disabled={loadingTranslate}
                   className="rounded-xl bg-gradient-to-r from-teal-700 to-cyan-700 px-4 py-2 text-sm font-semibold text-white transition hover:from-teal-600 hover:to-cyan-600 disabled:opacity-60"
                 >
                   {loadingTranslate ? "번역 중..." : "번역하기"}
+                </button>
+                <button
+                  onClick={() => speakText(translateInput, activeTranslateMeta.sourceLang, "source")}
+                  disabled={!ttsSupported || !translateInput.trim()}
+                  className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 disabled:opacity-45"
+                >
+                  {speakingTarget === "source" ? "🔊 원문 재생 중" : "🔊 원문 듣기"}
                 </button>
                 <button
                   onClick={reverseTranslateDirection}
@@ -1844,17 +1978,23 @@ export default function Home() {
               </div>
             )}
 
+            {ttsError && (
+              <div className="ui-panel rounded-2xl border-amber-300/70 bg-amber-50/85 px-4 py-3 text-sm text-amber-700">
+                {ttsError}
+              </div>
+            )}
+
             <section className="ui-panel ui-appear rounded-2xl p-4 sm:p-5">
               <div className="flex items-center justify-between gap-2">
                 <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-400">
                   번역 결과 ({activeTranslateMeta.targetLabel})
                 </p>
-                {translatedText && (
+                {speakingTarget && (
                   <button
-                    onClick={() => void copyText(translatedText, "번역 결과")}
-                    className="text-xs font-semibold text-teal-700 underline"
+                    onClick={stopSpeaking}
+                    className="text-xs font-semibold text-rose-600 underline"
                   >
-                    결과 복사
+                    ⏹ 음성 정지
                   </button>
                 )}
               </div>
@@ -1865,12 +2005,27 @@ export default function Home() {
                   <p className="mt-3 text-2xl font-bold leading-relaxed text-slate-900">
                     {translatedText}
                   </p>
-                  <button
-                    onClick={reverseTranslateDirection}
-                    className="mt-2 text-sm font-semibold text-slate-600 underline"
-                  >
-                    이 결과를 입력창으로 가져오기
-                  </button>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <button
+                      onClick={() => speakText(translatedText, activeTranslateMeta.targetLang, "translated")}
+                      disabled={!ttsSupported}
+                      className="text-sm font-semibold text-cyan-700 underline disabled:opacity-45"
+                    >
+                      {speakingTarget === "translated" ? "🔊 결과 재생 중" : "🔊 결과 듣기"}
+                    </button>
+                    <button
+                      onClick={() => void copyText(translatedText, "번역 결과")}
+                      className="text-sm font-semibold text-teal-700 underline"
+                    >
+                      결과 복사
+                    </button>
+                    <button
+                      onClick={reverseTranslateDirection}
+                      className="text-sm font-semibold text-slate-600 underline"
+                    >
+                      이 결과를 입력창으로 가져오기
+                    </button>
+                  </div>
                 </>
               ) : (
                 <p className="mt-3 text-sm text-slate-400">
